@@ -81,6 +81,7 @@ struct App {
     pinned: Cell<bool>,
     in_depth: Cell<bool>,
     chart_data: RefCell<Option<Arc<MarketDetails>>>,
+    hovered_symbol: RefCell<Option<String>>,
     hover: Timer,
     leave: Timer,
     start: Instant,
@@ -252,6 +253,7 @@ fn launch() -> Result<()> {
         pinned: Default::default(),
         in_depth: Default::default(),
         chart_data: Default::default(),
+        hovered_symbol: Default::default(),
         hover: Default::default(),
         leave: Default::default(),
         start: Instant::now(),
@@ -389,7 +391,8 @@ impl App {
                 }
             })
         });
-        self.window.on_hover_row(|i| with_app(|a| a.hover_row(i)));
+        self.window
+            .on_hover_row(|i, inside| with_app(|a| a.hover_row(i, inside)));
         self.window
             .on_key_action(|key| with_app(|a| a.command(&key)));
         self.window.on_context(|_| {
@@ -581,6 +584,11 @@ impl App {
                         eprintln!("REPLAY_READY quotes={} ticks=2", self.rows.row_count());
                     }
                     self.render_depth();
+                    if !self.hover.running()
+                        && *self.hovered_symbol.borrow() != *self.detail_symbol.borrow()
+                    {
+                        self.show_hovered();
+                    }
                 }
                 let secs = if self.pending.replace(false) {
                     0
@@ -776,33 +784,53 @@ impl App {
     }
 }
 impl App {
-    fn hover_row(self: &Rc<Self>, i: i32) {
-        if self.modal() || self.pinned.get() {
+    fn hover_row(self: &Rc<Self>, row: i32, inside: bool) {
+        if self.modal() || self.pinned.get() || !self.visible.get() {
             return;
         }
-        self.hover.stop();
+        let Some(symbol) = self.settings.borrow().symbols.get(row as usize).cloned() else {
+            return;
+        };
+        let same = self.hovered_symbol.borrow().as_ref() == Some(&symbol);
+        if !inside {
+            // A previous row's delayed leave can arrive after the next row's move.
+            if same {
+                self.hovered_symbol.take();
+                self.hover.stop();
+                self.schedule_leave();
+            }
+            return;
+        }
         self.leave.stop();
-        if let Some(id) = self.settings.borrow().symbols.get(i as usize).cloned() {
-            self.hover.start(
-                TimerMode::SingleShot,
-                Duration::from_millis(180),
-                move || with_app(|a| a.show_depth(&id, false)),
-            );
-        } else {
-            self.schedule_leave();
+        if same {
+            return;
+        }
+        self.hovered_symbol.replace(Some(symbol));
+        self.hover
+            .start(TimerMode::SingleShot, Duration::from_millis(180), || {
+                with_app(|a| a.show_hovered())
+            });
+    }
+    fn show_hovered(self: &Rc<Self>) {
+        if !self.pinned.get() {
+            let symbol = self.hovered_symbol.borrow().clone();
+            if let Some(symbol) = symbol {
+                self.show_depth(&symbol, false);
+            }
         }
     }
     fn schedule_leave(&self) {
         self.leave
             .start(TimerMode::SingleShot, Duration::from_millis(280), || {
                 with_app(|a| {
-                    if !a.in_depth.get() && !a.pinned.get() {
+                    if a.hovered_symbol.borrow().is_none() && !a.in_depth.get() && !a.pinned.get() {
                         a.close_depth();
                     }
                 })
             });
     }
     fn close_depth(&self) {
+        self.hovered_symbol.take();
         self.hover.stop();
         self.leave.stop();
         self.detail_timer.stop();
@@ -884,6 +912,14 @@ impl App {
             };
             d.set_scale(scale / self.window.window().scale_factor().max(1.));
             let size = slint::PhysicalSize::new((960. * scale) as u32, (840. * scale) as u32);
+            #[cfg(windows)]
+            if let Some((position, fitted)) = depth_placement(self.window.window(), size) {
+                d.window().set_position(position);
+                d.window().set_size(fitted);
+            } else {
+                d.window().set_size(size);
+            }
+            #[cfg(not(windows))]
             d.window().set_size(size);
             let _ = d.show();
             when_mapped(d, move |d| {
@@ -1169,26 +1205,23 @@ fn drag_window(_window: &slint::Window) {
     }
 }
 #[cfg(windows)]
-fn adjust_depth_window(
+fn depth_placement(
     main: &slint::Window,
-    depth: &slint::Window,
-    s: &AppSettings,
-    reposition: bool,
-) {
-    use windows_sys::Win32::{Graphics::Gdi::*, UI::WindowsAndMessaging::*};
-    let (Some(m), Some(d)) = (hwnd(main), hwnd(depth)) else {
-        return;
-    };
+    size: slint::PhysicalSize,
+) -> Option<(slint::PhysicalPosition, slint::PhysicalSize)> {
+    use windows_sys::Win32::{Graphics::Gdi::*, UI::WindowsAndMessaging::GetWindowRect};
+    let m = hwnd(main)?;
     unsafe {
         let mut info: MONITORINFO = std::mem::zeroed();
         info.cbSize = std::mem::size_of_val(&info) as u32;
         if GetMonitorInfoW(MonitorFromWindow(m, MONITOR_DEFAULTTONEAREST), &mut info) == 0 {
-            return;
+            return None;
         }
         let area = info.rcWork;
         let mut owner = std::mem::zeroed();
-        GetWindowRect(m, &mut owner);
-        let size = depth.size();
+        if GetWindowRect(m, &mut owner) == 0 {
+            return None;
+        }
         let w = (size.width as i32).min(area.right - area.left);
         let h = (size.height as i32).min(area.bottom - area.top);
         let x = if owner.right + 8 + w > area.right {
@@ -1196,6 +1229,30 @@ fn adjust_depth_window(
         } else {
             owner.right + 8
         };
+        Some((
+            slint::PhysicalPosition::new(
+                x.clamp(area.left, area.right - w),
+                owner.top.clamp(area.top, area.bottom - h),
+            ),
+            slint::PhysicalSize::new(w as u32, h as u32),
+        ))
+    }
+}
+#[cfg(windows)]
+fn adjust_depth_window(
+    main: &slint::Window,
+    depth: &slint::Window,
+    s: &AppSettings,
+    reposition: bool,
+) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+    let Some(d) = hwnd(depth) else {
+        return;
+    };
+    let Some((position, size)) = depth_placement(main, depth.size()) else {
+        return;
+    };
+    unsafe {
         let z = if s.always_on_top {
             HWND_TOPMOST
         } else {
@@ -1204,10 +1261,10 @@ fn adjust_depth_window(
         SetWindowPos(
             d,
             z,
-            x.clamp(area.left, area.right - w),
-            owner.top.clamp(area.top, area.bottom - h),
-            w,
-            h,
+            position.x,
+            position.y,
+            size.width as i32,
+            size.height as i32,
             SWP_NOACTIVATE
                 | if reposition {
                     0

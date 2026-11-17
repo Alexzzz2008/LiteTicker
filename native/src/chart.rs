@@ -3,6 +3,13 @@ use rust_decimal::{Decimal, prelude::ToPrimitive};
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
 use tiny_skia::{Color, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
+const WIDTH: u32 = 900;
+const HEIGHT: u32 = 220;
+
+fn tick_fraction(index: usize) -> f32 {
+    index as f32 / 4.
+}
+
 fn stroke(
     pix: &mut Pixmap,
     points: impl IntoIterator<Item = (f32, f32)>,
@@ -50,7 +57,7 @@ pub fn render(
     reference: Decimal,
     price: Decimal,
 ) -> (Image, Vec<slint::SharedString>) {
-    let mut pix = Pixmap::new(900, 220).unwrap();
+    let mut pix = Pixmap::new(WIDTH, HEIGHT).unwrap();
     pix.fill(Color::from_rgba8(25, 24, 29, 255));
     let coords: Vec<_> = if daily {
         data.daily
@@ -91,27 +98,32 @@ pub fn render(
         .collect();
     let y = |v: Decimal| {
         if hi > lo {
-            (218.0 - 216.0 * (v.to_f64().unwrap_or(lo) - lo) / (hi - lo)) as f32
+            (f64::from(HEIGHT) * (hi - v.to_f64().unwrap_or(lo)) / (hi - lo)) as f32
         } else {
-            110.
+            HEIGHT as f32 / 2.
         }
     };
     for i in 0..=4 {
-        let x = 2. + i as f32 * 224.;
+        let x = WIDTH as f32 * tick_fraction(i);
         if !daily {
-            stroke(&mut pix, [(x, 2.), (x, 218.)], [56, 54, 62], 1.);
+            stroke(&mut pix, [(x, 0.), (x, HEIGHT as f32)], [56, 54, 62], 1.);
         }
-        let y = 2. + i as f32 * 54.;
-        stroke(&mut pix, [(2., y), (898., y)], [56, 54, 62], 1.);
+        let y = HEIGHT as f32 * tick_fraction(i);
+        stroke(&mut pix, [(0., y), (WIDTH as f32, y)], [56, 54, 62], 1.);
     }
     if !daily && reference > Decimal::ZERO {
         let line = y(reference);
-        stroke(&mut pix, [(2., line), (898., line)], [113, 103, 88], 1.);
+        stroke(
+            &mut pix,
+            [(0., line), (WIDTH as f32, line)],
+            [113, 103, 88],
+            1.,
+        );
     }
     if daily {
-        let step = 896. / data.daily.len().max(1) as f32;
+        let step = WIDTH as f32 / data.daily.len().max(1) as f32;
         for (i, b) in data.daily.iter().enumerate() {
-            let x = 2. + step * (i as f32 + 0.5);
+            let x = step * (i as f32 + 0.5);
             let rgb = if b.close >= b.open {
                 [231, 54, 62]
             } else {
@@ -144,7 +156,10 @@ pub fn render(
                 if v <= Decimal::ZERO {
                     return None;
                 }
-                Some((2. + 896. * f32::from(minute_index(&m.time)?) / 240., y(v)))
+                Some((
+                    WIDTH as f32 * f32::from(minute_index(&m.time)?) / 240.,
+                    y(v),
+                ))
             });
             stroke(&mut pix, points, color, 1.8);
         }
@@ -152,4 +167,43 @@ pub fn render(
     let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(pix.width(), pix.height());
     buffer.make_mut_bytes().copy_from_slice(pix.data());
     (Image::from_rgba8_premultiplied(buffer), labels)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raster_grid_and_price_labels_share_all_five_plot_positions() {
+        let (image, labels) = render(
+            &MarketDetails::default(),
+            true,
+            Decimal::ZERO,
+            Decimal::ZERO,
+        );
+        assert_eq!(labels.len(), 5);
+        let rgba = image.to_rgba8().unwrap();
+        for i in 0..5 {
+            let source_y = HEIGHT as f32 * tick_fraction(i);
+            let row = (source_y as usize).min(HEIGHT as usize - 1);
+            let offset = (row * WIDTH as usize + 90) * 4;
+            assert_ne!(
+                &rgba.as_bytes()[offset..offset + 3],
+                &[25, 24, 29],
+                "missing grid tick {i}"
+            );
+            for scale in [0.8, 1., 1.2] {
+                for dpi in [1., 1.5, 2.] {
+                    for height in [60., 220., 317.] {
+                        let label_height = 26. * scale;
+                        let plot_top = label_height / 2.;
+                        let plot_height = height * scale - label_height;
+                        let line = plot_top + source_y / HEIGHT as f32 * plot_height;
+                        let label_top = plot_top + plot_height * i as f32 / 4. - label_height / 2.;
+                        assert!(((label_top + label_height / 2. - line) * dpi).abs() < 0.001);
+                    }
+                }
+            }
+        }
+    }
 }

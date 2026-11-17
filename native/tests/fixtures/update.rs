@@ -50,6 +50,13 @@ fn block(key: &str, kind: u16, value: &[u8], children: Vec<Vec<u8>>) -> Vec<u8> 
     put16(&mut result, 4, kind);
     result
 }
+fn next_preview_version() -> &'static str {
+    static NEXT: OnceLock<String> = OnceLock::new();
+    NEXT.get_or_init(|| {
+        let PreviewVersion(major, minor, patch, n) = version(crate::VERSION).unwrap();
+        format!("{major}.{minor}.{patch}-preview.{}", n + 1)
+    })
+}
 fn executable(name: &str, product: &str, managed: bool) -> Vec<u8> {
     let version = version(name).unwrap();
     let mut fixed = vec![0; 52];
@@ -244,8 +251,8 @@ impl Drop for Server {
 
 #[test]
 fn only_independent_prerelease_tags_and_official_assets_are_accepted() {
-    let bytes = executable("1.0.6-preview.2", PRODUCT, false);
-    let r = release("1.0.6-preview.2", &bytes);
+    let bytes = executable(next_preview_version(), PRODUCT, false);
+    let r = release(next_preview_version(), &bytes);
     assert!(parse_release(&metadata(&r)).is_ok());
     for tag in [
         "v1.0.6",
@@ -285,13 +292,13 @@ fn only_independent_prerelease_tags_and_official_assets_are_accepted() {
 }
 #[test]
 fn native_identity_refuses_managed_wrong_product_corrupt_headers_and_version() {
-    let bytes = executable("1.0.6-preview.2", PRODUCT, false);
+    let bytes = executable(next_preview_version(), PRODUCT, false);
     assert_eq!(
         native_identity(&bytes).unwrap().version,
-        version("1.0.6-preview.2").unwrap()
+        version(next_preview_version()).unwrap()
     );
-    assert!(native_identity(&executable("1.0.6-preview.2", PRODUCT, true)).is_err());
-    assert!(native_identity(&executable("1.0.6-preview.2", "LiteTicker", false)).is_err());
+    assert!(native_identity(&executable(next_preview_version(), PRODUCT, true)).is_err());
+    assert!(native_identity(&executable(next_preview_version(), "LiteTicker", false)).is_err());
     for n in [0, 1, 63, 128, 255, 511] {
         assert!(native_identity(&bytes[..n]).is_err());
     }
@@ -308,8 +315,8 @@ fn native_identity_refuses_managed_wrong_product_corrupt_headers_and_version() {
 #[test]
 fn download_hops_are_bounded_to_fixed_proxy_or_github_cdn() {
     let r = release(
-        "1.0.6-preview.2",
-        &executable("1.0.6-preview.2", PRODUCT, false),
+        next_preview_version(),
+        &executable(next_preview_version(), PRODUCT, false),
     );
     for uri in [
         r.download_url.as_str(),
@@ -340,8 +347,8 @@ fn download_hops_are_bounded_to_fixed_proxy_or_github_cdn() {
 #[tokio::test]
 async fn check_new_equal_unavailable_and_failures_are_distinct() {
     let temp = Temp::new();
-    let bytes = executable("1.0.6-preview.2", PRODUCT, false);
-    let newer = release("1.0.6-preview.2", &bytes);
+    let bytes = executable(next_preview_version(), PRODUCT, false);
+    let newer = release(next_preview_version(), &bytes);
     let current = release(crate::VERSION, &executable(crate::VERSION, PRODUCT, false));
     let old = release(
         "1.0.5-preview.1",
@@ -375,7 +382,7 @@ async fn check_new_equal_unavailable_and_failures_are_distinct() {
             .unwrap()
             .unwrap()
             .version,
-        "1.0.6-preview.2"
+        next_preview_version()
     );
     assert!(c.check(CancellationToken::new()).await.unwrap().is_none());
     for _ in 0..2 {
@@ -395,8 +402,8 @@ async fn check_new_equal_unavailable_and_failures_are_distinct() {
 #[tokio::test]
 async fn verified_download_reports_progress_and_owns_cleanup() {
     let temp = Temp::new();
-    let bytes = executable("1.0.6-preview.2", PRODUCT, false);
-    let release = release("1.0.6-preview.2", &bytes);
+    let bytes = executable(next_preview_version(), PRODUCT, false);
+    let release = release(next_preview_version(), &bytes);
     let server = Server::new(vec![Reply::body(bytes.clone())]);
     let c = server.client(&temp);
     let values = Arc::new(Mutex::new(Vec::new()));
@@ -425,8 +432,8 @@ async fn verified_download_reports_progress_and_owns_cleanup() {
 #[tokio::test]
 async fn bad_proxy_bytes_fall_back_once_and_failures_leave_no_payload() {
     let temp = Temp::new();
-    let bytes = executable("1.0.6-preview.2", PRODUCT, false);
-    let release = release("1.0.6-preview.2", &bytes);
+    let bytes = executable(next_preview_version(), PRODUCT, false);
+    let release = release(next_preview_version(), &bytes);
     let mut corrupt = bytes.clone();
     corrupt[0] = 0;
     let server = Server::new(vec![
@@ -443,11 +450,11 @@ async fn bad_proxy_bytes_fall_back_once_and_failures_leave_no_payload() {
     assert_eq!(fs::read_dir(&temp.0).unwrap().count(), 0);
     for body in [
         corrupt,
-        executable("1.0.6-preview.2", PRODUCT, true),
-        executable("1.0.6-preview.2", "LiteTicker", false),
+        executable(next_preview_version(), PRODUCT, true),
+        executable(next_preview_version(), "LiteTicker", false),
     ] {
         let expected = super::parse_release(&metadata(&Release {
-            version: "1.0.6-preview.2".into(),
+            version: next_preview_version().into(),
             sha256: hex(&Sha256::digest(&body)),
             size: body.len() as u64,
             ..release.clone()
@@ -468,8 +475,8 @@ async fn bad_proxy_bytes_fall_back_once_and_failures_leave_no_payload() {
 #[tokio::test]
 async fn cancellation_in_request_or_after_success_progress_never_returns_payload() {
     let temp = Temp::new();
-    let bytes = executable("1.0.6-preview.2", PRODUCT, false);
-    let release = release("1.0.6-preview.2", &bytes);
+    let bytes = executable(next_preview_version(), PRODUCT, false);
+    let release = release(next_preview_version(), &bytes);
     let server = Server::new(vec![Reply {
         delay: Duration::from_millis(150),
         ..Reply::body(bytes.clone())
@@ -510,7 +517,7 @@ async fn cancellation_in_request_or_after_success_progress_never_returns_payload
 }
 fn plan(temp: &Temp) -> Plan {
     let old = executable(crate::VERSION, PRODUCT, false);
-    let new = executable("1.0.6-preview.2", PRODUCT, false);
+    let new = executable(next_preview_version(), PRODUCT, false);
     let target = temp.0.join(ASSET);
     let payload = temp.0.join("payload.exe");
     fs::write(&target, &old).unwrap();
@@ -518,7 +525,7 @@ fn plan(temp: &Temp) -> Plan {
     Plan {
         target,
         payload,
-        version: "1.0.6-preview.2".into(),
+        version: next_preview_version().into(),
         sha256: hex(&Sha256::digest(new)),
         size: fs::metadata(temp.0.join("payload.exe")).unwrap().len(),
         original_sha256: hex(&Sha256::digest(old)),
@@ -616,8 +623,8 @@ async fn deadlines_and_check_cancellation_are_explicit() {
 #[tokio::test]
 async fn unsafe_redirects_are_rejected_before_following_and_official_fallback_is_bounded() {
     let temp = Temp::new();
-    let bytes = executable("1.0.6-preview.2", PRODUCT, false);
-    let release = release("1.0.6-preview.2", &bytes);
+    let bytes = executable(next_preview_version(), PRODUCT, false);
+    let release = release(next_preview_version(), &bytes);
     let server = Server::new(vec![
         Reply {
             status: 302,
@@ -653,7 +660,7 @@ async fn unsafe_redirects_are_rejected_before_following_and_official_fallback_is
 }
 #[test]
 fn identity_checks_file_version_original_filename_and_handoff_arguments() {
-    let bytes = executable("1.0.6-preview.2", PRODUCT, false);
+    let bytes = executable(next_preview_version(), PRODUCT, false);
     let signature = 0xFEEF04BD_u32.to_le_bytes();
     let index = bytes.windows(4).position(|s| s == signature).unwrap();
     let mut wrong = bytes.clone();

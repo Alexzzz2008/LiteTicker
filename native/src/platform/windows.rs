@@ -17,8 +17,8 @@ use windows_sys::Win32::{
         Controls::{DRAWITEMSTRUCT, MEASUREITEMSTRUCT, ODS_DISABLED, ODS_SELECTED, ODT_MENU},
         HiDpi::GetDpiForWindow,
         Input::KeyboardAndMouse::{
-            MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, RegisterHotKey, ReleaseCapture,
-            UnregisterHotKey,
+            GetAsyncKeyState, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, RegisterHotKey,
+            ReleaseCapture, UnregisterHotKey, VK_LBUTTON,
         },
         Shell::*,
         WindowsAndMessaging::*,
@@ -29,6 +29,7 @@ const PRODUCT: &str = "轻盘 · 桌面看盘助手";
 const WAKE: u32 = 0x8001;
 const TRAY: u32 = WM_APP + 2;
 const OPEN_MENU: u32 = WM_APP + 3;
+const BEGIN_DRAG: u32 = WM_APP + 4;
 const NIN_KEYSELECT: u32 = NIN_SELECT | 1;
 const SUBCLASS_ID: usize = 0x4c54;
 const CANVAS: u32 = rgb(19, 22, 27);
@@ -358,8 +359,7 @@ impl DesktopPlatform {
     }
     pub fn start_drag(&self) {
         unsafe {
-            ReleaseCapture();
-            PostMessageW(self.state.hwnd, WM_NCLBUTTONDOWN, HTCAPTION as usize, 0);
+            PostMessageW(self.state.hwnd, BEGIN_DRAG, 0, 0);
         }
     }
     pub fn window_position(&self) -> (i32, i32) {
@@ -532,6 +532,20 @@ unsafe extern "system" fn subclass(
             }
             WAKE => {
                 defer(state.id, Action::Activate);
+                return 0;
+            }
+            BEGIN_DRAG => {
+                let mut point = POINT::default();
+                if GetAsyncKeyState(i32::from(VK_LBUTTON)) < 0 && GetCursorPos(&mut point) != 0 {
+                    let position = (u32::from(point.y as u16) << 16) | u32::from(point.x as u16);
+                    ReleaseCapture();
+                    SendMessageW(
+                        hwnd,
+                        WM_NCLBUTTONDOWN,
+                        HTCAPTION as usize,
+                        position as isize,
+                    );
+                }
                 return 0;
             }
             OPEN_MENU => {

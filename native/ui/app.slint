@@ -40,12 +40,18 @@ export component MainWindow inherits Window {
     in-out property <int> selection: -1;
     callback select-row(int);
     callback open-row(int);
-    callback hover-row(int);
+    callback hover-row(int, bool);
     callback context(int);
     callback drag();
     callback key-action(string);
     preferred-width: 550px * q-scale;
     preferred-height: (14px + 43px * max(1, min(12, rows.length))) * q-scale + 34px * g-scale;
+    property <length> quote-content-width: max(0px, list.visible-width - 8px * q-scale);
+    property <length> quote-gap: min(8px * q-scale, max(0px, (quote-content-width - 436px * q-scale) / 3));
+    property <length> quote-name-width: min(126px * q-scale, max(0px, quote-content-width - 324px * q-scale - 3 * quote-gap));
+    property <length> quote-price-width: 108px * q-scale;
+    property <length> quote-change-width: 116px * q-scale;
+    property <length> quote-volume-width: min(108px * q-scale, max(0px, quote-content-width - quote-name-width - quote-price-width - quote-change-width - 3 * quote-gap));
     min-width: 480px * q-scale;
     min-height: 76px * q-scale + 34px * g-scale;
     keys := FocusScope {
@@ -63,25 +69,33 @@ export component MainWindow inherits Window {
     }
     forward-focus: keys;
     VerticalLayout {
+        x: 0px; y: 0px; width: root.width; height: root.height;
         padding-left: 8px * root.q-scale; padding-right: 8px * root.q-scale; padding-top: 8px * root.q-scale;
         list := ListView {
             for row[i] in root.rows: Rectangle {
                 height: 43px * root.q-scale;
                 background: i == root.selection ? #302f38 : transparent;
-                HorizontalLayout {
-                    padding-left: 4px; padding-right: 4px;
-                    Text { text: row.name; color: #dedce0; horizontal-stretch: 34; width: parent.width * 0.29; overflow: elide; font-size: 28px * root.q-scale; vertical-alignment: center; }
-                    Text { text: row.price; color: row.ink; width: parent.width * 0.24; horizontal-alignment: right; vertical-alignment: center; font-family: "Consolas"; font-weight: 700; font-size: 28px * root.q-scale; }
-                    Text { text: row.change; color: row.ink; width: parent.width * 0.22; horizontal-alignment: right; vertical-alignment: center; font-family: "Consolas"; font-weight: 700; font-size: 26px * root.q-scale; }
-                    Text { text: row.volume; color: #9898a3; horizontal-alignment: right; vertical-alignment: center; font-family: "Consolas"; font-size: 22px * root.q-scale; }
-                }
+                Text { x: 4px * root.q-scale; width: root.quote-name-width; height: parent.height; text: row.name; color: #dedce0; overflow: elide; font-size: 28px * root.q-scale; vertical-alignment: center; }
+                Text { x: 4px * root.q-scale + root.quote-name-width + root.quote-gap; width: root.quote-price-width; height: parent.height; text: row.price; color: row.ink; overflow: elide; horizontal-alignment: right; vertical-alignment: center; font-family: "Consolas"; font-weight: 700; font-size: 28px * root.q-scale; }
+                Text { x: 4px * root.q-scale + root.quote-name-width + root.quote-price-width + 2 * root.quote-gap; width: root.quote-change-width; height: parent.height; text: row.change; color: row.ink; overflow: elide; horizontal-alignment: right; vertical-alignment: center; font-family: "Consolas"; font-weight: 700; font-size: 26px * root.q-scale; }
+                Text { x: 4px * root.q-scale + root.quote-content-width - root.quote-volume-width; width: root.quote-volume-width; height: parent.height; text: row.volume; color: #9898a3; overflow: elide; horizontal-alignment: right; vertical-alignment: center; font-family: "Consolas"; font-size: 22px * root.q-scale; }
                 TouchArea {
-                    changed has-hover => { root.hover-row(self.has-hover ? i : -1); }
+                    width: parent.width; height: parent.height;
+                    private property <bool> dragging: false;
+                    moved => {
+                        if self.pressed && !self.dragging && max(abs(self.mouse-x - self.pressed-x), abs(self.mouse-y - self.pressed-y)) >= 4px {
+                            self.dragging = true;
+                            root.drag();
+                        }
+                    }
+                    changed has-hover => { root.hover-row(i, self.has-hover); }
                     pointer-event(event) => {
-                        if event.kind == PointerEventKind.down {
+                        if event.kind == PointerEventKind.move && !self.pressed {
+                            root.hover-row(i, true);
+                        } else if event.kind == PointerEventKind.down {
+                            self.dragging = false;
                             keys.focus(); root.select-row(i);
                             if event.button == PointerEventButton.right { root.context(i); }
-                            else if event.button == PointerEventButton.left {root.drag();}
                         }
                     }
                     double-clicked => { root.open-row(i); }
@@ -121,6 +135,7 @@ export component DetailsWindow inherits Window {
     min-width: 540px * scale; min-height: 470px * scale;
     touch := TouchArea { changed has-hover => { root.hover(self.has-hover); } }
     VerticalLayout {
+        x: 0px; y: 0px; width: root.width; height: root.height;
         padding: 18px * root.scale; spacing: 4px * root.scale;
         HorizontalLayout {
             height: 46px * root.scale; spacing: 8px * root.scale;
@@ -137,47 +152,69 @@ export component DetailsWindow inherits Window {
             Action {text-size: 19px * root.scale; width: 98px * root.scale; label: "日 K"; accent: root.daily; activated => {root.command("daily");}}
             Text {text: root.daily ? "日 K" : "白线 价格 · 金线 均价"; color: #a4a8b1; vertical-alignment: center;}
         }
-        Rectangle {
+        chart-area := Rectangle {
             vertical-stretch: 2; min-height: 60px * root.scale; background: #19181c;
-            if root.has-chart: HorizontalLayout {
-                VerticalLayout {width: 72px * root.scale;
-                    for tick in root.axis: Text {text: tick; color: #908e9c; font-size: 19px * root.scale; vertical-alignment: center;}
-                }
-                Image {source: root.chart; image-fit: fill; accessible-label: "分时与日K走势图";}
+            property <length> axis-width: 72px * root.scale;
+            property <length> tick-height: 26px * root.scale;
+            // Labels and the raster share this exact plot, including both endpoints.
+            plot := Image {
+                x: chart-area.axis-width; y: chart-area.tick-height / 2;
+                width: parent.width - self.x; height: parent.height - chart-area.tick-height;
+                visible: root.has-chart; source: root.chart; image-fit: fill;
+                accessible-label: "分时与日K走势图";
+            }
+            for tick[i] in root.axis: Text {
+                visible: root.has-chart; text: tick; color: #908e9c; font-size: 19px * root.scale;
+                x: 0px; width: chart-area.axis-width - 8px * root.scale; height: chart-area.tick-height;
+                y: plot.y + plot.height * i / 4 - self.height / 2;
+                horizontal-alignment: right; vertical-alignment: center;
             }
             if !root.has-chart: Text {text: root.daily ? "日 K 暂无数据" : "分时暂无数据"; color:#9595a1; horizontal-alignment:center; vertical-alignment:center;}
         }
-        HorizontalLayout {
+        Rectangle {
             height: 28px * root.scale;
-            Rectangle { width:72px * root.scale; }
-            Rectangle {
-                for label[i] in root.daily ? [root.first-date, root.last-date] : ["09:30","10:30","11:30 / 13:00","14:00","15:00"]: Text {
-                    text: label; color: #a4a8b1; width: self.preferred-width;
-                    x: max(0px, min(parent.width - self.width, parent.width * i / (root.daily ? 1 : 4) - self.width / 2));
-                }
+            for label[i] in root.daily ? [root.first-date, root.last-date] : ["09:30","10:30","11:30 / 13:00","14:00","15:00"]: Text {
+                text: label; color: #a4a8b1; width: self.preferred-width;
+                x: plot.x + max(0px, min(plot.width - self.width, plot.width * i / (root.daily ? 1 : 4) - self.width / 2));
             }
         }
-        HorizontalLayout {
+        books := HorizontalLayout {
             vertical-stretch: 3; spacing: 20px * root.scale;
-            VerticalLayout {
-                horizontal-stretch: 1;
-                HorizontalLayout { height: 36px * root.scale;
-                    Text {text: !root.has-depth ? "五档暂无数据" : root.amount ? "五档 · 金额（元）" : "五档盘口 · 手"; color: #b4b3bc; vertical-alignment: center;}
+            ladder-table := VerticalLayout {
+                width: (books.width - 20px * root.scale) / 2;
+                property <length> gap: 8px * root.scale;
+                property <length> table-font: min(root.default-font-size, max(1px * root.scale, (self.width - 3 * gap) / (root.amount ? 12 : 10)));
+                property <length> label-width: 2 * table-font;
+                property <length> quantity-width: (root.amount ? 6 : 4) * table-font;
+                property <length> price-width: 4 * table-font;
+                HorizontalLayout { height: 36px * root.scale; spacing: 8px * root.scale;
+                    Text {width: max(0px, ladder-table.width - 98px * root.scale); text: !root.has-depth ? "五档暂无数据" : root.amount ? "五档 · 金额（元）" : "五档盘口 · 手"; color: #b4b3bc; vertical-alignment: center; overflow: elide;}
                     Action {text-size: 19px * root.scale; width: 90px * root.scale; visible: root.has-depth; label: root.amount ? "看手数" : "看金额"; activated => {root.command("unit");}}
                 }
                 for level in root.ladder: HorizontalLayout {
-                    Text {text: level.label; color: #a4a8b1;}
-                    Text {text: level.price; color: level.ink; font-family: "Consolas"; horizontal-alignment: right;}
-                    Text {text: level.size; color: #a4a8b1; font-family: "Consolas"; horizontal-alignment: right;}
+                    spacing: 0px;
+                    Text {width: ladder-table.label-width; font-size: ladder-table.table-font; text: level.label; color: #a4a8b1; overflow: elide;}
+                    Rectangle {min-width: ladder-table.gap; horizontal-stretch: 1;}
+                    Text {width: ladder-table.price-width; font-size: ladder-table.table-font; text: level.price; color: level.ink; font-family: "Consolas"; horizontal-alignment: right; overflow: elide;}
+                    Rectangle {min-width: ladder-table.gap; horizontal-stretch: 2;}
+                    Text {width: ladder-table.quantity-width; font-size: ladder-table.table-font; text: level.size; color: #a4a8b1; font-family: "Consolas"; horizontal-alignment: right; overflow: elide;}
                 }
             }
-            VerticalLayout {
-                horizontal-stretch: 1;
-                Text {height: 36px * root.scale; text: root.trades-title; color: #b4b3bc; vertical-alignment: center;}
+            trades-table := VerticalLayout {
+                width: (books.width - 20px * root.scale) / 2;
+                property <length> gap: 8px * root.scale;
+                property <length> table-font: min(root.default-font-size, max(1px * root.scale, (self.width - 3 * gap) / 12.5));
+                property <length> time-width: 4.5 * table-font;
+                property <length> quantity-width: 4 * table-font;
+                property <length> price-width: 4 * table-font;
+                Text {height: 36px * root.scale; text: root.trades-title; color: #b4b3bc; vertical-alignment: center; overflow: elide;}
                 for trade in root.trades: HorizontalLayout {
-                    Text {text: trade.time; color: #a4a8b1; font-family: "Consolas";}
-                    Text {text: trade.price; color: trade.ink; horizontal-alignment: right; font-family: "Consolas";}
-                    Text {text: trade.size; color: #a4a8b1; horizontal-alignment: right; font-family: "Consolas";}
+                    spacing: 0px;
+                    Text {width: trades-table.time-width; font-size: trades-table.table-font; text: trade.time; color: #a4a8b1; font-family: "Consolas"; overflow: elide;}
+                    Rectangle {min-width: trades-table.gap; horizontal-stretch: 1;}
+                    Text {width: trades-table.price-width; font-size: trades-table.table-font; text: trade.price; color: trade.ink; horizontal-alignment: right; font-family: "Consolas"; overflow: elide;}
+                    Rectangle {min-width: trades-table.gap; horizontal-stretch: 2;}
+                    Text {width: trades-table.quantity-width; font-size: trades-table.table-font; text: trade.size; color: #a4a8b1; horizontal-alignment: right; font-family: "Consolas"; overflow: elide;}
                 }
             }
         }
