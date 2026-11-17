@@ -11,7 +11,7 @@ BEGIN
    VALUE "FileVersion", "1.0.6.0\0"
    VALUE "FileDescription", "LiteTicker native preview\0"
    VALUE "ProductName", "LiteTicker Preview\0"
-   VALUE "ProductVersion", "1.0.6-preview.2\0"
+   VALUE "ProductVersion", "1.0.6-preview.3\0"
    VALUE "OriginalFilename", "LiteTicker-preview.exe\0"
   END
  END

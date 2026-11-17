@@ -1022,6 +1022,7 @@ impl App {
         }
     }
     fn render_depth(&self) {
+        const TRADE_ROW_COUNT: usize = 10;
         let Some(id) = self.detail_symbol.borrow().clone() else {
             return;
         };
@@ -1130,7 +1131,7 @@ impl App {
             d.set_trades_title(format!("分笔成交 · {}s", s.trade_refresh_seconds).into());
             let mut ticks = ticks.iter().collect::<Vec<_>>();
             ticks.sort_by(|a, b| b.time.cmp(&a.time));
-            for t in ticks.into_iter().take(8) {
+            for t in ticks.into_iter().take(TRADE_ROW_COUNT) {
                 rows.push(TradeRow {
                     time: t.time.as_str().into(),
                     price: format_price(t.price).into(),
@@ -1149,7 +1150,7 @@ impl App {
                 d.set_trades_title("分钟成交 · 非逐笔".into());
                 let mut minutes = data.minutes.iter().collect::<Vec<_>>();
                 minutes.sort_by(|a, b| b.time.cmp(&a.time));
-                for m in minutes.into_iter().take(8) {
+                for m in minutes.into_iter().take(TRADE_ROW_COUNT) {
                     rows.push(TradeRow {
                         time: m.time.as_str().into(),
                         price: format_price(m.price).into(),
@@ -1159,7 +1160,7 @@ impl App {
                 }
             }
         }
-        while rows.len() < 8 {
+        while rows.len() < TRADE_ROW_COUNT {
             rows.push(TradeRow {
                 time: "—".into(),
                 price: "—".into(),

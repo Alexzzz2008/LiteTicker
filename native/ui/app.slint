@@ -47,11 +47,13 @@ export component MainWindow inherits Window {
     preferred-width: 550px * q-scale;
     preferred-height: (14px + 43px * max(1, min(12, rows.length))) * q-scale + 34px * g-scale;
     property <length> quote-content-width: max(0px, list.visible-width - 8px * q-scale);
-    property <length> quote-gap: min(8px * q-scale, max(0px, (quote-content-width - 436px * q-scale) / 3));
-    property <length> quote-name-width: min(126px * q-scale, max(0px, quote-content-width - 324px * q-scale - 3 * quote-gap));
-    property <length> quote-price-width: 108px * q-scale;
-    property <length> quote-change-width: 116px * q-scale;
-    property <length> quote-volume-width: min(108px * q-scale, max(0px, quote-content-width - quote-name-width - quote-price-width - quote-change-width - 3 * quote-gap));
+    property <length> quote-gap: max(0px, (quote-content-width - 356px * q-scale) / 3);
+    property <length> quote-price-end: 200px * q-scale + quote-gap;
+    property <length> quote-change-end: quote-price-end + 86px * q-scale + quote-gap;
+    property <length> quote-name-width: 140px * q-scale;
+    property <length> quote-price-width: 140px * q-scale;
+    property <length> quote-change-width: min(116px * q-scale, max(0px, quote-change-end - quote-price-end - 8px * q-scale));
+    property <length> quote-volume-width: min(108px * q-scale, max(0px, quote-content-width - quote-change-end - 8px * q-scale));
     min-width: 480px * q-scale;
     min-height: 76px * q-scale + 34px * g-scale;
     keys := FocusScope {
@@ -75,9 +77,9 @@ export component MainWindow inherits Window {
             for row[i] in root.rows: Rectangle {
                 height: 43px * root.q-scale;
                 background: i == root.selection ? #302f38 : transparent;
-                Text { x: 4px * root.q-scale; width: root.quote-name-width; height: parent.height; text: row.name; color: #dedce0; overflow: elide; font-size: 28px * root.q-scale; vertical-alignment: center; }
-                Text { x: 4px * root.q-scale + root.quote-name-width + root.quote-gap; width: root.quote-price-width; height: parent.height; text: row.price; color: row.ink; overflow: elide; horizontal-alignment: right; vertical-alignment: center; font-family: "Consolas"; font-weight: 700; font-size: 28px * root.q-scale; }
-                Text { x: 4px * root.q-scale + root.quote-name-width + root.quote-price-width + 2 * root.quote-gap; width: root.quote-change-width; height: parent.height; text: row.change; color: row.ink; overflow: elide; horizontal-alignment: right; vertical-alignment: center; font-family: "Consolas"; font-weight: 700; font-size: 26px * root.q-scale; }
+                Text { x: 4px * root.q-scale; width: min(root.quote-name-width, max(0px, root.quote-price-end - min(quote-price.preferred-width, root.quote-price-width) - 8px * root.q-scale)); height: parent.height; text: row.name; color: #dedce0; overflow: elide; font-size: 28px * root.q-scale; vertical-alignment: center; }
+                quote-price := Text { x: 4px * root.q-scale + root.quote-price-end - root.quote-price-width; width: root.quote-price-width; height: parent.height; text: row.price; color: row.ink; overflow: elide; horizontal-alignment: right; vertical-alignment: center; font-family: "Consolas"; font-weight: 700; font-size: 28px * root.q-scale; }
+                Text { x: 4px * root.q-scale + root.quote-change-end - root.quote-change-width; width: root.quote-change-width; height: parent.height; text: row.change; color: row.ink; overflow: elide; horizontal-alignment: right; vertical-alignment: center; font-family: "Consolas"; font-weight: 700; font-size: 26px * root.q-scale; }
                 Text { x: 4px * root.q-scale + root.quote-content-width - root.quote-volume-width; width: root.quote-volume-width; height: parent.height; text: row.volume; color: #9898a3; overflow: elide; horizontal-alignment: right; vertical-alignment: center; font-family: "Consolas"; font-size: 22px * root.q-scale; }
                 TouchArea {
                     width: parent.width; height: parent.height;
@@ -187,6 +189,7 @@ export component DetailsWindow inherits Window {
                 property <length> label-width: 2 * table-font;
                 property <length> quantity-width: (root.amount ? 6 : 4) * table-font;
                 property <length> price-width: 4 * table-font;
+                property <length> price-end: max(label-width + gap + price-width, min(self.width - gap - quantity-width, self.width / 2 + (root.amount ? 0.55 : 1.4) * table-font));
                 HorizontalLayout { height: 36px * root.scale; spacing: 8px * root.scale;
                     Text {width: max(0px, ladder-table.width - 98px * root.scale); text: !root.has-depth ? "五档暂无数据" : root.amount ? "五档 · 金额（元）" : "五档盘口 · 手"; color: #b4b3bc; vertical-alignment: center; overflow: elide;}
                     Action {text-size: 19px * root.scale; width: 90px * root.scale; visible: root.has-depth; label: root.amount ? "看手数" : "看金额"; activated => {root.command("unit");}}
@@ -194,9 +197,9 @@ export component DetailsWindow inherits Window {
                 for level in root.ladder: HorizontalLayout {
                     spacing: 0px;
                     Text {width: ladder-table.label-width; font-size: ladder-table.table-font; text: level.label; color: #a4a8b1; overflow: elide;}
-                    Rectangle {min-width: ladder-table.gap; horizontal-stretch: 1;}
+                    Rectangle {width: ladder-table.price-end - ladder-table.label-width - ladder-table.price-width;}
                     Text {width: ladder-table.price-width; font-size: ladder-table.table-font; text: level.price; color: level.ink; font-family: "Consolas"; horizontal-alignment: right; overflow: elide;}
-                    Rectangle {min-width: ladder-table.gap; horizontal-stretch: 2;}
+                    Rectangle {min-width: ladder-table.gap; horizontal-stretch: 1;}
                     Text {width: ladder-table.quantity-width; font-size: ladder-table.table-font; text: level.size; color: #a4a8b1; font-family: "Consolas"; horizontal-alignment: right; overflow: elide;}
                 }
             }
@@ -207,13 +210,14 @@ export component DetailsWindow inherits Window {
                 property <length> time-width: 4.5 * table-font;
                 property <length> quantity-width: 4 * table-font;
                 property <length> price-width: 4 * table-font;
+                property <length> price-end: max(time-width + gap + price-width, min(self.width - gap - quantity-width, self.width / 2 + 2.85 * table-font));
                 Text {height: 36px * root.scale; text: root.trades-title; color: #b4b3bc; vertical-alignment: center; overflow: elide;}
                 for trade in root.trades: HorizontalLayout {
                     spacing: 0px;
                     Text {width: trades-table.time-width; font-size: trades-table.table-font; text: trade.time; color: #a4a8b1; font-family: "Consolas"; overflow: elide;}
-                    Rectangle {min-width: trades-table.gap; horizontal-stretch: 1;}
+                    Rectangle {width: trades-table.price-end - trades-table.time-width - trades-table.price-width;}
                     Text {width: trades-table.price-width; font-size: trades-table.table-font; text: trade.price; color: trade.ink; horizontal-alignment: right; font-family: "Consolas"; overflow: elide;}
-                    Rectangle {min-width: trades-table.gap; horizontal-stretch: 2;}
+                    Rectangle {min-width: trades-table.gap; horizontal-stretch: 1;}
                     Text {width: trades-table.quantity-width; font-size: trades-table.table-font; text: trade.size; color: #a4a8b1; horizontal-alignment: right; font-family: "Consolas"; overflow: elide;}
                 }
             }

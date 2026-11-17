@@ -184,6 +184,20 @@ pub fn start(app: Rc<App>, out: PathBuf) -> Result<Timer> {
                 1 | 2 => {
                     let d = app.depth.borrow().as_ref().context("盘口没有打开")?.clone_strong();
                     ensure!(d.get_pinned() && d.get_has_chart() && d.get_ladder().row_count() == 10, "盘口、图表或五档未就绪");
+                    ensure!(d.get_trades().row_count() == 10, "成交表必须显示10行数据或占位");
+                    let replay = app.replay.as_ref().context("缺少成交回放")?;
+                    if replay.details.trades.len() >= 10 {
+                        let mut expected = replay.details.trades.iter().collect::<Vec<_>>();
+                        expected.sort_by(|a, b| b.time.cmp(&a.time));
+                        for index in [8usize, 9] {
+                            let row = d.get_trades().row_data(index).context("第9或第10笔成交缺行")?;
+                            let trade = expected[index];
+                            ensure!(row.time.as_str() == trade.time.as_str()
+                                && row.price == format_price(trade.price)
+                                && row.size == format_volume_lots(trade.volume_lots),
+                                "第{}笔成交的时间、价格或手数与回放不符", index + 1);
+                        }
+                    }
                     if phase == 1 {
                         check_numeric_columns(&d)?;
                         check_chart_axis(&d)?;
