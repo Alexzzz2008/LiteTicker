@@ -1,7 +1,7 @@
 //! Verified native updates from the official v2.0.0+ stable release channel.
 use anyhow::{Context, Result, bail, ensure};
 use regex::Regex;
-use reqwest::{Client, Response, Url, redirect::Policy};
+use reqwest::{Client, Method, Response, Url, header, redirect::Policy};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 #[cfg(windows)]
@@ -23,6 +23,7 @@ use tokio_util::sync::CancellationToken;
 
 // shortcut: inspect the latest 30 releases; use a dedicated manifest if this channel outgrows that window.
 const API: &str = "https://api.github.com/repos/Alexzzz2008/LiteTicker/releases?per_page=30";
+const RELEASES: &str = "https://github.com/Alexzzz2008/LiteTicker/releases";
 const ASSET: &str = "LiteTicker.exe";
 const CHECKSUM_ASSET: &str = "LiteTicker.exe.sha256";
 const PRODUCT: &str = "LiteTicker";
@@ -73,11 +74,21 @@ impl UpdateClient {
     pub async fn check(&self, token: CancellationToken) -> Result<Option<Release>> {
         cancel(&token)?;
         let work = async {
-            let response = self.request(API, "application/vnd.github+json").await?;
+            let response = self
+                .request(Method::GET, API, "application/vnd.github+json")
+                .await?;
+            if matches!(response.status().as_u16(), 403 | 429) {
+                return self
+                    .check_latest_page()
+                    .await
+                    .context("GitHub 更新接口暂时限制访问，从官方发布页检查也未成功，请稍后重试");
+            }
             if response.status() == 404 {
                 return Err(ChannelUnavailable.into());
             }
-            let response = response.error_for_status()?;
+            let response = response
+                .error_for_status()
+                .context("GitHub 暂时无法提供版本信息，请稍后重试")?;
             let bytes = read_bounded(response, METADATA_LIMIT).await?;
             let releases: serde_json::Value =
                 serde_json::from_slice(&bytes).context("正式版版本信息不是有效JSON")?;
@@ -113,7 +124,61 @@ impl UpdateClient {
             let release = parse_release(metadata, checksum.as_deref())?;
             Ok((version(&release.version)? > version(crate::VERSION)?).then_some(release))
         };
-        bounded(&token, Duration::from_secs(10), "检查正式版更新超时", work).await
+        bounded(
+            &token,
+            Duration::from_secs(20),
+            "检查正式版更新超时，请稍后重试",
+            work,
+        )
+        .await
+    }
+    async fn check_latest_page(&self) -> Result<Option<Release>> {
+        let latest = Url::parse(&format!("{RELEASES}/latest"))?;
+        let response = self
+            .request(Method::GET, latest.as_str(), "text/html")
+            .await?;
+        ensure!(
+            response.status().is_redirection(),
+            "GitHub 未返回最新正式版标签"
+        );
+        let target = response
+            .headers()
+            .get(header::LOCATION)
+            .context("缺少正式版地址")?;
+        let page_url = latest.join(target.to_str()?)?;
+        let version_name = page_url
+            .as_str()
+            .strip_prefix(&format!("{RELEASES}/tag/v"))
+            .context("最新版本地址不属于轻盘官方发布页")?;
+        if version(version_name)? <= version(crate::VERSION)? {
+            return Ok(None);
+        }
+        let download_url = Url::parse(&format!("{RELEASES}/download/v{version_name}/{ASSET}"))?;
+        let checksum_url = download_url.join(CHECKSUM_ASSET)?;
+        let checksum = self
+            .open_asset(Method::GET, &checksum_url, &checksum_url, false)
+            .await?;
+        let sha256 = checksum_file(&read_bounded(checksum, 256).await?)?;
+        // HEAD has no body. Its Content-Length header describes the published executable.
+        let metadata = self
+            .open_asset(Method::HEAD, &download_url, &download_url, false)
+            .await?;
+        let size = metadata
+            .headers()
+            .get(header::CONTENT_LENGTH)
+            .context("官方程序未提供文件大小")?
+            .to_str()?
+            .parse()?;
+        let release = Release {
+            version: version_name.into(),
+            download_url,
+            size,
+            sha256,
+            page_url,
+            notes: String::new(),
+        };
+        validate_release(&release)?;
+        Ok(Some(release))
     }
     pub async fn download(
         &self,
@@ -143,7 +208,7 @@ impl UpdateClient {
         };
         bounded(&token, Duration::from_secs(120), "下载正式版更新超时", work).await
     }
-    async fn request(&self, url: &str, accept: &str) -> Result<Response> {
+    async fn request(&self, method: Method, url: &str, accept: &str) -> Result<Response> {
         #[cfg(test)]
         let rewritten = self.origin.as_ref().map(|origin| {
             let url = Url::parse(url).unwrap();
@@ -155,13 +220,13 @@ impl UpdateClient {
         });
         #[cfg(test)]
         let url = rewritten.as_deref().unwrap_or(url);
-        Ok(self
-            .http
-            .get(url)
+        self.http
+            .request(method, url)
             .header(reqwest::header::ACCEPT, accept)
             .header("X-GitHub-Api-Version", "2022-11-28")
             .send()
-            .await?)
+            .await
+            .context("无法连接更新服务，请检查网络后重试")
     }
     async fn checksum_if_needed(&self, metadata: &serde_json::Value) -> Result<Option<String>> {
         let executable = selected_asset(metadata, ASSET)?;
@@ -188,13 +253,14 @@ impl UpdateClient {
             "校验文件不属于同一官方正式发行"
         );
         // The authority for a missing API digest must never come from the download proxy.
-        let response = self.open_asset(&url, &url, false).await?;
+        let response = self.open_asset(Method::GET, &url, &url, false).await?;
         let body = read_bounded(response, 256).await?;
         ensure!(body.len() as u64 == size, "官方校验文件大小不匹配");
         Ok(Some(checksum_file(&body)?))
     }
     async fn open_asset(
         &self,
+        method: Method,
         initial: &Url,
         official: &Url,
         allow_proxy: bool,
@@ -203,7 +269,7 @@ impl UpdateClient {
         for redirects in 0..=3 {
             validate_hop(&url, official, allow_proxy)?;
             let response = self
-                .request(url.as_str(), "application/octet-stream")
+                .request(method.clone(), url.as_str(), "application/octet-stream")
                 .await?;
             if response.status().is_redirection() {
                 ensure!(redirects < 3, "更新下载重定向过多");
@@ -227,7 +293,9 @@ impl UpdateClient {
         progress: Option<&Progress>,
         token: &CancellationToken,
     ) -> Result<DownloadedUpdate> {
-        let mut response = self.open_asset(url, &release.download_url, true).await?;
+        let mut response = self
+            .open_asset(Method::GET, url, &release.download_url, true)
+            .await?;
         if let Some(length) = response.content_length() {
             ensure!(length == release.size, "更新下载大小与官方资产不一致");
         }

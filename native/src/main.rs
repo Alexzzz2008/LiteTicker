@@ -1092,6 +1092,12 @@ impl App {
             {
                 let (image, axis) =
                     chart::render(data, self.daily.get(), q.previous_close, q.price);
+                let average = data
+                    .minutes
+                    .last()
+                    .map(|point| point.average)
+                    .filter(|price| !self.daily.get() && *price > Decimal::ZERO);
+                d.set_average_price(average.map(format_price).unwrap_or_default().into());
                 d.set_chart(image);
                 d.set_axis(ModelRc::new(VecModel::from(axis)));
                 d.set_first_date(
@@ -1111,6 +1117,8 @@ impl App {
                 self.chart_data.replace(Some(data.clone()));
             }
         } else {
+            self.chart_data.take();
+            d.set_average_price(slint::SharedString::default());
             d.set_chart(slint::Image::default());
         }
         let recent = self.trades.borrow().snapshot(self.start.elapsed(), None);

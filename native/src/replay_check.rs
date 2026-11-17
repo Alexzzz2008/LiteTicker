@@ -83,25 +83,50 @@ fn check_numeric_columns(depth: &DetailsWindow) -> Result<()> {
 fn check_chart_axis(depth: &DetailsWindow) -> Result<()> {
     let labels = depth.get_axis();
     ensure!(labels.row_count() == 5, "分时图缺少价格刻度");
-    let with_labels = depth.window().take_snapshot()?;
-    depth.set_axis(ModelRc::default());
-    let without_labels = depth.window().take_snapshot()?;
-    depth.set_axis(labels);
-    let width = with_labels.width() as usize;
-    let rightmost = with_labels
-        .as_bytes()
-        .chunks_exact(4)
-        .zip(without_labels.as_bytes().chunks_exact(4))
-        .enumerate()
-        .filter_map(|(i, (a, b))| (a != b).then_some(i % width))
-        .max()
-        .context("分时图没有绘制价格刻度")?;
+    let chart = depth.get_chart();
     let scale = depth.get_scale() * depth.window().scale_factor();
-    let gutter_edge = (18. + 72. - 8.) * scale;
-    ensure!(
-        (gutter_edge - rightmost as f32).abs() <= 5. * scale,
-        "价格刻度没有在绘图区左侧右对齐，刻度右边缘 {rightmost}"
-    );
+    let mut short_plot = 0;
+    for text in ["12.345", "-1234567890.123"] {
+        depth.set_axis(ModelRc::new(VecModel::from(vec![text.into(); 5])));
+        let frame = depth.window().take_snapshot()?;
+        depth.set_chart(slint::Image::default());
+        let blank_plot = depth.window().take_snapshot()?;
+        depth.set_chart(chart.clone());
+        let width = frame.width() as usize;
+        // Clearing only the raster preserves text measurements and reveals its real left edge.
+        let plot_left = frame
+            .as_bytes()
+            .chunks_exact(4)
+            .zip(blank_plot.as_bytes().chunks_exact(4))
+            .enumerate()
+            .filter_map(|(i, (a, b))| (a != b).then_some(i % width))
+            .min()
+            .context("走势图没有绘制")?;
+        let ink: Vec<_> = frame
+            .as_bytes()
+            .chunks_exact(4)
+            .enumerate()
+            .filter_map(|(i, p)| {
+                (i % width < plot_left && p[..3] == [144, 142, 156]).then_some(i % width)
+            })
+            .collect();
+        let left = *ink.iter().min().context("价格刻度没有绘制")? as f32;
+        let right = *ink.iter().max().unwrap() as f32;
+        ensure!(left >= 20. * scale - 1., "长价格刻度贴边或被裁切：{text}");
+        ensure!(
+            (plot_left as f32 - 8. * scale - right).abs() <= 5. * scale,
+            "价格刻度没有随绘图区左边缘右对齐：{text}"
+        );
+        if short_plot == 0 {
+            short_plot = plot_left;
+        } else {
+            ensure!(
+                plot_left as f32 > short_plot as f32 + 8. * scale,
+                "长刻度没有扩大纵轴宽度"
+            );
+        }
+    }
+    depth.set_axis(labels);
     Ok(())
 }
 
@@ -410,6 +435,9 @@ pub fn start(app: Rc<App>, out: PathBuf) -> Result<Timer> {
                     ensure!(!app.pinned.get(), "悬停或单击不应固定盘口");
                     let depth = app.depth.borrow().as_ref().context("悬停未打开盘口")?.clone_strong();
                     ensure!(depth.get_heading().contains(quote.name.as_str()), "盘口名称未跟随鼠标");
+                    if quote.symbol != replay.details.symbol {
+                        ensure!(depth.get_average_price().is_empty(), "切换股票后仍残留其他股票的均价");
+                    }
                     if phase == -1 {
                         ensure!(app.selection.borrow().as_deref() == Some(replay.quotes[0].symbol.as_str()), "悬停改变了先前的单击选中行");
                         depth.invoke_command("pin".into());
@@ -458,6 +486,9 @@ pub fn start(app: Rc<App>, out: PathBuf) -> Result<Timer> {
                         }
                     }
                     if phase == 1 {
+                        let expected = replay.details.minutes.last().map(|m| m.average)
+                            .filter(|v| *v > Decimal::ZERO).map(format_price).unwrap_or_default();
+                        ensure!(d.get_average_price().as_str() == expected, "盘口均价与最新分时数据不符");
                         check_numeric_columns(&d)?;
                         check_chart_axis(&d)?;
                         ensure!(d.window().size() == slint::PhysicalSize::new(960, 840), "盘口初始尺寸错误 {:?}", d.window().size());
@@ -466,6 +497,7 @@ pub fn start(app: Rc<App>, out: PathBuf) -> Result<Timer> {
                         d.invoke_command("daily".into());
                     } else {
                         ensure!(d.get_amount() && d.get_daily(), "盘口未切换为金额与日 K");
+                        ensure!(d.get_average_price().is_empty(), "日 K 仍显示分时均价");
                         capture(d.window(), &out.join("daily.png"))?;
                         d.invoke_command("close".into());
                         #[cfg(windows)]

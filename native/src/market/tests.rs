@@ -317,6 +317,30 @@ fn bad_duplicate_overflowed_rows_cannot_pollute_other_quotes() {
     assert_eq!(parsed[0].price, d("12.30"));
     assert_eq!(parsed[1].price, d("12.50"));
 }
+#[test]
+fn missing_minute_average_does_not_substitute_the_last_price() {
+    let tencent = json!({"data":{"sh600000":{"data":{"data":[
+        "0930 10 0 0", "0931 10 100", "0932 10 120 0"
+    ]}}}});
+    let eastmoney = json!({"data":{"code":"600000","trends":[
+        "2026-11-16 09:30,10,10,10,10,30,30000,-",
+        "2026-11-16 09:31,10,10,10,10,40,40000",
+        "2026-11-16 09:32,10,10,10,10,40,40000,0"
+    ]}});
+    for (source, payload) in [
+        (MarketSource::Tencent, tencent),
+        (MarketSource::Eastmoney, eastmoney),
+    ] {
+        let minutes = details::parse_minutes(&payload, "600000.SH", "sh600000", source).unwrap();
+        assert_eq!(minutes.len(), 3);
+        assert!(
+            minutes
+                .iter()
+                .all(|m| m.price == d("10") && m.average.is_zero())
+        );
+    }
+}
+
 #[tokio::test]
 async fn minute_details_one_request_units_sort_and_identity() {
     let payload = r#"{"data":{"sh600000":{"data":{"data":["0931 10.2 150 150500","0930 10 100 100000","1200 20 200 200000","bad","0932 NaN 200 200000"]}}}}"#;

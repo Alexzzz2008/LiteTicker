@@ -34,7 +34,7 @@ pub(super) fn parse_minutes(
             row.split(',').collect()
         };
         let tencent = source == MarketSource::Tencent;
-        if fields.len() < if tencent { 4 } else { 8 } {
+        if fields.len() < if tencent { 3 } else { 6 } {
             continue;
         }
         let time = if tencent {
@@ -64,22 +64,13 @@ pub(super) fn parse_minutes(
             continue;
         }
         let average = if tencent {
-            let Some(amount) = decimal(fields[3]).filter(|n| *n >= Decimal::ZERO) else {
-                continue;
-            };
-            if volume > Decimal::ZERO {
-                let Some(a) = amount
-                    .checked_div(volume)
-                    .and_then(|n| n.checked_div(Decimal::from(100)))
-                else {
-                    continue;
-                };
-                a
-            } else {
-                price
-            }
+            fields
+                .get(3)
+                .and_then(|amount| decimal(amount))
+                .and_then(|amount| amount.checked_div(volume))
+                .and_then(|per_lot| per_lot.checked_div(Decimal::from(100)))
         } else {
-            decimal(fields[7]).unwrap_or(price)
+            fields.get(7).and_then(|value| decimal(value))
         };
         let minute = time.format("%H:%M").to_string();
         sorted.insert(
@@ -87,11 +78,9 @@ pub(super) fn parse_minutes(
             MinutePoint {
                 time: minute,
                 price,
-                average: if average <= Decimal::ZERO {
-                    price
-                } else {
-                    average
-                },
+                average: average
+                    .filter(|value| *value > Decimal::ZERO)
+                    .unwrap_or_default(),
                 volume_lots: volume,
             },
         );

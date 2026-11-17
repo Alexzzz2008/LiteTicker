@@ -38,10 +38,7 @@ impl App {
         self.set_update_message("正在检查更新…".into());
         self.runtime.spawn(async move {
             let checked = async { update::UpdateClient::new()?.check(token).await }.await;
-            deliver(Completion::Update(
-                id,
-                checked.map_err(|e| format!("{e:#}")),
-            ));
+            deliver(Completion::Update(id, checked.map_err(|e| e.to_string())));
         });
     }
     pub(super) fn checked_update(&self, id: u64, result: Result<Option<Release>, String>) {
@@ -51,7 +48,10 @@ impl App {
         self.update_token.take();
         let text = match result {
             Ok(Some(release)) => {
-                let message = format!("发现新版本 v{}。{}", release.version, release.notes);
+                let message = format!(
+                    "发现新版本 v{}，点击「下载并重启」即可更新。",
+                    release.version
+                );
                 #[cfg(windows)]
                 if !self.modal() {
                     if let Some(platform) = self.platform.borrow().as_ref() {

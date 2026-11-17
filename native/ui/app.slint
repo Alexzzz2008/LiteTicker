@@ -120,6 +120,7 @@ export component DetailsWindow inherits Window {
     in property <float> scale: 1;
     in property <string> heading;
     in property <string> price;
+    in property <string> average-price;
     in property <color> ink;
     in property <string> status;
     in property <string> trades-title;
@@ -134,6 +135,9 @@ export component DetailsWindow inherits Window {
     in property <bool> pinned;
     in property <bool> daily;
     in property <bool> amount;
+    private property <float> vertical-scale: min(root.scale, root.height / 700px);
+    private property <length> book-header-height: 36px * vertical-scale;
+    private property <length> book-row-height: 1.25 * root.default-font-size;
     callback command(string);
     callback hover(bool);
     preferred-width: 960px * scale; preferred-height: 840px * scale;
@@ -141,26 +145,42 @@ export component DetailsWindow inherits Window {
     touch := TouchArea { changed has-hover => { root.hover(self.has-hover); } }
     VerticalLayout {
         x: 0px; y: 0px; width: root.width; height: root.height;
-        padding: 18px * root.scale; spacing: 4px * root.scale;
+        padding-left: 18px * root.scale; padding-right: 18px * root.scale;
+        padding-top: 18px * root.vertical-scale; padding-bottom: 18px * root.vertical-scale;
+        spacing: 4px * root.vertical-scale;
         HorizontalLayout {
-            height: 46px * root.scale; spacing: 8px * root.scale;
-            Text { text: root.heading; color: #dedce0; font-size: 30px * root.scale; font-weight: 700; vertical-alignment: center;
+            height: 46px * root.vertical-scale; spacing: 8px * root.scale;
+            Text { text: root.heading; color: #dedce0; font-size: 30px * root.vertical-scale; font-weight: 700; vertical-alignment: center;
                 WindowMoveArea {}
             }
             Action {text-size: 19px * root.scale; width: 100px * root.scale; label: root.pinned ? "已固定" : "固定"; activated => {root.command("pin");}}
             Action {text-size: 19px * root.scale; width: 86px * root.scale; label: "关闭"; activated => {root.command("close");}}
         }
-        Text { height: 46px * root.scale; text: root.price; color: root.ink; font-size: 32px * root.scale; font-weight: 700; }
+        Text { height: 46px * root.vertical-scale; text: root.price; color: root.ink; font-size: 32px * root.vertical-scale; font-weight: 700; }
         HorizontalLayout {
-            height: 39px * root.scale; spacing: 8px * root.scale;
+            height: 39px * root.vertical-scale; spacing: 8px * root.scale;
             Action {text-size: 19px * root.scale; width: 98px * root.scale; label: "分时"; accent: !root.daily; activated => {root.command("minute");}}
             Action {text-size: 19px * root.scale; width: 98px * root.scale; label: "日 K"; accent: root.daily; activated => {root.command("daily");}}
-            Text {text: root.daily ? "日 K" : "白线 价格 · 金线 均价"; color: #a4a8b1; vertical-alignment: center;}
+            Text {
+                text: root.daily ? "日 K" : root.width < 650px * root.scale ? "价格 · 均价" : "白线 价格 · 金线 均价";
+                horizontal-stretch: 0; color: #a4a8b1; vertical-alignment: center;
+            }
+            if !root.daily: Text {
+                text: root.average-price == "" ? "—" : root.average-price;
+                horizontal-stretch: 0; color: root.average-price == "" ? #a4a8b1 : #dcb24e;
+                font-family: "Consolas"; vertical-alignment: center;
+            }
+            Rectangle {}
         }
         chart-area := Rectangle {
-            vertical-stretch: 2; min-height: 60px * root.scale; background: #19181c;
-            property <length> axis-width: 72px * root.scale;
+            vertical-stretch: 1; min-height: 60px * root.scale; background: #19181c;
+            property <length> axis-width: max(72px * root.scale, axis-measure.preferred-width + 12px * root.scale);
             property <length> tick-height: 26px * root.scale;
+            axis-measure := Text {
+                visible: false; font-size: 19px * root.scale;
+                text: root.axis.length == 5 ? root.axis[0] + "\n" + root.axis[1] + "\n" + root.axis[2] + "\n" + root.axis[3] + "\n" + root.axis[4] : "";
+                wrap: no-wrap;
+            }
             // Labels and the raster share this exact plot, including both endpoints.
             plot := Image {
                 x: chart-area.axis-width; y: chart-area.tick-height / 2;
@@ -177,14 +197,14 @@ export component DetailsWindow inherits Window {
             if !root.has-chart: Text {text: root.daily ? "日 K 暂无数据" : "分时暂无数据"; color:#9595a1; horizontal-alignment:center; vertical-alignment:center;}
         }
         Rectangle {
-            height: 28px * root.scale;
+            height: 28px * root.vertical-scale;
             for label[i] in root.daily ? [root.first-date, root.last-date] : ["09:30","10:30","11:30 / 13:00","14:00","15:00"]: Text {
                 text: label; color: #a4a8b1; width: self.preferred-width;
                 x: plot.x + max(0px, min(plot.width - self.width, plot.width * i / (root.daily ? 1 : 4) - self.width / 2));
             }
         }
         books := HorizontalLayout {
-            vertical-stretch: 3; spacing: 20px * root.scale;
+            height: root.book-header-height + 10 * root.book-row-height; spacing: 20px * root.scale;
             ladder-table := VerticalLayout {
                 width: (books.width - 20px * root.scale) / 2;
                 property <length> gap: 8px * root.scale;
@@ -193,12 +213,12 @@ export component DetailsWindow inherits Window {
                 property <length> quantity-width: (root.amount ? 6 : 4) * table-font;
                 property <length> price-width: 4 * table-font;
                 property <length> price-end: max(label-width + gap + price-width, min(self.width - gap - quantity-width, self.width / 2 + (root.amount ? 0.55 : 1.4) * table-font));
-                HorizontalLayout { height: 36px * root.scale; spacing: 8px * root.scale;
+                HorizontalLayout { height: root.book-header-height; spacing: 8px * root.scale;
                     Text {width: max(0px, ladder-table.width - 98px * root.scale); text: !root.has-depth ? "五档暂无数据" : root.amount ? "五档 · 金额（元）" : "五档盘口 · 手"; color: #b4b3bc; vertical-alignment: center; overflow: elide;}
                     Action {text-size: 19px * root.scale; width: 90px * root.scale; visible: root.has-depth; label: root.amount ? "看手数" : "看金额"; activated => {root.command("unit");}}
                 }
                 for level in root.ladder: HorizontalLayout {
-                    spacing: 0px;
+                    height: root.book-row-height; spacing: 0px;
                     Text {width: ladder-table.label-width; font-size: ladder-table.table-font; text: level.label; color: #a4a8b1; overflow: elide;}
                     Rectangle {width: ladder-table.price-end - ladder-table.label-width - ladder-table.price-width;}
                     Text {width: ladder-table.price-width; font-size: ladder-table.table-font; text: level.price; color: level.ink; font-family: "Consolas"; horizontal-alignment: right; overflow: elide;}
@@ -214,9 +234,9 @@ export component DetailsWindow inherits Window {
                 property <length> quantity-width: 4 * table-font;
                 property <length> price-width: 4 * table-font;
                 property <length> price-end: max(time-width + gap + price-width, min(self.width - gap - quantity-width, self.width / 2 + 2.85 * table-font));
-                Text {height: 36px * root.scale; text: root.trades-title; color: #b4b3bc; vertical-alignment: center; overflow: elide;}
+                Text {height: root.book-header-height; text: root.trades-title; color: #b4b3bc; vertical-alignment: center; overflow: elide;}
                 for trade in root.trades: HorizontalLayout {
-                    spacing: 0px;
+                    height: root.book-row-height; spacing: 0px;
                     Text {width: trades-table.time-width; font-size: trades-table.table-font; text: trade.time; color: #a4a8b1; font-family: "Consolas"; overflow: elide;}
                     Rectangle {width: trades-table.price-end - trades-table.time-width - trades-table.price-width;}
                     Text {width: trades-table.price-width; font-size: trades-table.table-font; text: trade.price; color: trade.ink; horizontal-alignment: right; font-family: "Consolas"; overflow: elide;}

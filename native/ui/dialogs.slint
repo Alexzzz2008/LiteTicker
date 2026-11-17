@@ -212,7 +212,7 @@ export component SettingsWindow inherits Window {
                         Caption {scale:root.scale;text:"当前版本　 v" + root.version;}
                         Caption {scale:root.scale;text:"可用更新　 " + root.latest-version;}
                         HorizontalLayout {height:48px * root.scale;Caption {scale:root.scale;text:"启动时自动检查更新";} Toggle {scale:root.scale;width:62%;checked <=> root.automatic;accessible-label:"启动时自动检查更新";}}
-                        Text {text:"发现新版后会提醒。下载安装后重启生效，保留自选股与设置。";color:#a4a8b1;font-size:15px * root.scale;wrap:word-wrap;}
+                        Text {text:"更新后会保留自选股和设置。";color:#a4a8b1;font-size:15px * root.scale;wrap:word-wrap;}
                         HorizontalLayout {height:44px * root.scale;spacing:12px * root.scale;
                             DialogButton {scale:root.scale;text:"检查更新";enabled:!root.update-busy;clicked=>{root.action("check");}}
                             DialogButton {scale:root.scale;text:"下载并重启";primary:true;enabled:root.download-enabled && !root.update-busy;clicked=>{root.action("download");}}

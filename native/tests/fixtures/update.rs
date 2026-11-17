@@ -433,6 +433,220 @@ async fn check_new_equal_unavailable_and_failures_are_distinct() {
     }
     assert_eq!(server.count(), 6);
 }
+#[tokio::test]
+async fn rate_limit_checks_official_latest_and_verified_native_asset() {
+    let temp = Temp::new();
+    let bytes = executable(next_release_version(), PRODUCT, false);
+    let release = release(next_release_version(), &bytes);
+    for (status, cdn) in [(403, false), (429, true)] {
+        let mut replies = vec![
+            Reply {
+                status,
+                ..Reply::body(vec![])
+            },
+            Reply {
+                status: 302,
+                location: Some(release.page_url.to_string()),
+                ..Reply::body(vec![])
+            },
+            Reply::body(format!("{}  LiteTicker.exe\n", release.sha256).into_bytes()),
+        ];
+        if cdn {
+            replies.push(Reply {
+                status: 302,
+                location: Some(
+                    "https://release-assets.githubusercontent.com/asset?token=fixture".into(),
+                ),
+                ..Reply::body(vec![])
+            });
+        }
+        replies.push(Reply::body(bytes.clone()));
+        let server = Server::new(replies);
+        let found = server
+            .client(&temp)
+            .check(CancellationToken::new())
+            .await
+            .unwrap_or_else(|e| panic!("HTTP {status}: {e:#}"))
+            .unwrap();
+        assert_eq!(found.version, release.version);
+        assert_eq!(found.sha256, release.sha256);
+        assert_eq!(found.size, release.size);
+        assert_eq!(found.download_url, release.download_url);
+        assert_eq!(found.page_url, release.page_url);
+        let requests = server.requests.lock().unwrap();
+        assert_eq!(requests.len(), if cdn { 5 } else { 4 });
+        assert!(requests[0].starts_with("GET /repos/Alexzzz2008/LiteTicker/releases?per_page=30 "));
+        assert!(requests[1].starts_with("GET /Alexzzz2008/LiteTicker/releases/latest "));
+        assert!(requests[2].starts_with(&format!(
+            "GET /Alexzzz2008/LiteTicker/releases/download/v{}/LiteTicker.exe.sha256 ",
+            release.version
+        )));
+        assert!(requests[3].starts_with(&format!(
+            "HEAD /Alexzzz2008/LiteTicker/releases/download/v{}/LiteTicker.exe ",
+            release.version
+        )));
+        if cdn {
+            assert!(requests[4].starts_with("HEAD /asset?token=fixture "));
+        }
+        assert!(requests.iter().all(|request| !request.contains("gh-proxy")));
+    }
+    assert_eq!(fs::read_dir(&temp.0).unwrap().count(), 0);
+}
+#[tokio::test]
+async fn rate_limit_equal_or_older_release_only_checks_the_official_latest_redirect() {
+    let temp = Temp::new();
+    for name in [crate::VERSION, "2.0.0"] {
+        let server = Server::new(vec![
+            Reply {
+                status: 403,
+                ..Reply::body(vec![])
+            },
+            Reply {
+                status: 302,
+                location: Some(format!(
+                    "https://github.com/Alexzzz2008/LiteTicker/releases/tag/v{name}"
+                )),
+                ..Reply::body(vec![])
+            },
+        ]);
+        assert!(
+            server
+                .client(&temp)
+                .check(CancellationToken::new())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(server.count(), 2);
+    }
+}
+#[tokio::test]
+async fn rate_limit_fallback_refuses_unofficial_or_nonstable_latest_destinations() {
+    let temp = Temp::new();
+    for location in [
+        format!(
+            "https://evil.example/Alexzzz2008/LiteTicker/releases/tag/v{}",
+            next_release_version()
+        ),
+        format!(
+            "https://github.com/other/LiteTicker/releases/tag/v{}",
+            next_release_version()
+        ),
+        format!(
+            "http://github.com/Alexzzz2008/LiteTicker/releases/tag/v{}",
+            next_release_version()
+        ),
+        format!(
+            "https://github.com/Alexzzz2008/LiteTicker/releases/tag/v{}-preview.1",
+            next_release_version()
+        ),
+        "https://github.com/Alexzzz2008/LiteTicker/releases/tag/v1.0.5".into(),
+        format!(
+            "https://github.com/Alexzzz2008/LiteTicker/releases/tag/v{}?download=1",
+            next_release_version()
+        ),
+    ] {
+        let server = Server::new(vec![
+            Reply {
+                status: 429,
+                ..Reply::body(vec![])
+            },
+            Reply {
+                status: 302,
+                location: Some(location),
+                ..Reply::body(vec![])
+            },
+        ]);
+        assert!(
+            server
+                .client(&temp)
+                .check(CancellationToken::new())
+                .await
+                .is_err()
+        );
+        assert_eq!(server.count(), 2);
+    }
+    for reply in [
+        Reply::body(b"not an authoritative redirect".to_vec()),
+        Reply {
+            status: 302,
+            ..Reply::body(vec![])
+        },
+    ] {
+        let server = Server::new(vec![
+            Reply {
+                status: 403,
+                ..Reply::body(vec![])
+            },
+            reply,
+        ]);
+        assert!(
+            server
+                .client(&temp)
+                .check(CancellationToken::new())
+                .await
+                .is_err()
+        );
+        assert_eq!(server.count(), 2);
+    }
+}
+#[tokio::test]
+async fn rate_limit_fallback_rejects_bad_checksum_and_untrusted_asset_redirects() {
+    let temp = Temp::new();
+    let bytes = executable(next_release_version(), PRODUCT, false);
+    let release = release(next_release_version(), &bytes);
+    for body in [
+        b"bad".to_vec(),
+        format!("{}  other.exe\n", release.sha256).into_bytes(),
+        vec![b'0'; 257],
+    ] {
+        let server = Server::new(vec![
+            Reply {
+                status: 403,
+                ..Reply::body(vec![])
+            },
+            Reply {
+                status: 302,
+                location: Some(release.page_url.to_string()),
+                ..Reply::body(vec![])
+            },
+            Reply::body(body),
+        ]);
+        assert!(
+            server
+                .client(&temp)
+                .check(CancellationToken::new())
+                .await
+                .is_err()
+        );
+        assert_eq!(server.count(), 3);
+    }
+    let server = Server::new(vec![
+        Reply {
+            status: 429,
+            ..Reply::body(vec![])
+        },
+        Reply {
+            status: 302,
+            location: Some(release.page_url.to_string()),
+            ..Reply::body(vec![])
+        },
+        Reply::body(format!("{}  LiteTicker.exe\n", release.sha256).into_bytes()),
+        Reply {
+            status: 302,
+            location: Some("https://evil.example/LiteTicker.exe".into()),
+            ..Reply::body(vec![])
+        },
+    ]);
+    assert!(
+        server
+            .client(&temp)
+            .check(CancellationToken::new())
+            .await
+            .is_err()
+    );
+    assert_eq!(server.count(), 4);
+}
 #[test]
 fn checksum_is_one_exact_executable_record_and_digest_has_priority() {
     let bytes = executable(next_release_version(), PRODUCT, false);

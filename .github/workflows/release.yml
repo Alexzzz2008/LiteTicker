@@ -63,27 +63,10 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $notesPath = Join-Path $env:RUNNER_TEMP 'liteticker-release-notes.md'
           $notes = @(
-            ('轻盘 · 桌面看盘助手 ' + $env:RELEASE_TAG + ' 正式版。'),
+            '分时图增高，价格刻度按数值宽度对齐，黄色数字显示最新均价。五档与分笔成交各显示十行。',
+            '更新检查增加官方发布页备用通道，提示更简洁。',
             '',
-            '### 本版修复',
-            '- 修复拖动设置或添加自选窗口后，控件无法点击或切换页面的问题。',
-            '- 统一有框按钮、下拉框和选中行的左右留白；导航标签去掉红色框，保留选中底色和键盘焦点提示。',
-            '- v2 用户可在设置的“版本与更新”中检查新版，使用“下载并重启”升级到本版。',
-            '',
-            '### 下载与安装',
-            '- 下载 LiteTicker-win.zip，完整解压后运行 install.cmd；也可直接运行 LiteTicker.exe。',
-            '- 原生 x64 单文件程序，静态链接 CRT，无需安装 .NET Framework 或 VC++ 运行库。',
-            '- 安装器也可在没有本地 EXE 时从本仓库的最新正式 Release 下载并校验。',
-            '',
-            '### 从 v1.0.5 升级',
-            '- 本次跨技术栈升级需要手动安装：先在旧版托盘菜单中选择退出，再运行新版安装入口。',
-            '- v1.0.5 的 .NET 更新器不能安装原生程序；其程序集校验会拒绝新格式并保留旧版。',
-            '- 安装保留当前用户的自选股与设置；已有 D:\LiteTicker 安装会继续使用该目录。',
-            '',
-            '### v2 后续更新',
-            '- 在设置中检查更新、下载并重启，校验官方版本与 SHA256 摘要。',
-            '- LiteTicker.exe.sha256、LiteTicker-win.zip.sha256 与 SHA256SUMS.txt 提供下载校验。',
-            '- 功能说明和最新界面截图见仓库 README。'
+            '推荐下载 LiteTicker.exe，双击即可运行。也可下载 ZIP 安装包，完整解压后双击 install.cmd。'
           )
           [IO.File]::WriteAllText($notesPath, (($notes -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))
           $names = @('LiteTicker.exe', 'LiteTicker.exe.sha256', 'LiteTicker-win.zip', 'LiteTicker-win.zip.sha256', 'SHA256SUMS.txt')
