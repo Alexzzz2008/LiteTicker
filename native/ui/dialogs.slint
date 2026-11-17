@@ -6,19 +6,22 @@ component DialogButton inherits Rectangle {
     in property <length> text-size: 20px * scale;
     in property <bool> primary: false;
     in property <bool> quiet: false;
+    in property <bool> navigation-tab: false;
     in property <bool> selected: false;
     in property <bool> enabled: true;
     in property <bool> tab-stop: true;
+    private property <length> horizontal-padding: root.text == "×" ? 0px : 12px * scale;
     callback clicked();
-    min-width: (quiet ? 42px : 88px) * scale; min-height: 40px * scale;
+    preferred-width: root.text == "×" ? 42px * scale : max(88px * scale, label.preferred-width + 2 * horizontal-padding);
+    min-width: self.preferred-width; min-height: 40px * scale; horizontal-stretch: 0;
     border-radius: 4px * scale;
-    border-width: quiet && !keys.has-focus ? 0px : 1px;
+    border-width: root.navigation-tab || (quiet && !keys.has-focus) ? 0px : 1px;
     border-color: keys.has-focus ? #de4552 : #454a53;
-    background: !enabled ? #252930 : selected ? #4a222a : primary ? (area.pressed ? #a92e3b : area.has-hover ? #ec5562 : #de4552) : area.has-hover || area.pressed ? #252930 : #13161b;
+    background: !enabled ? #252930 : selected ? (root.navigation-tab && keys.has-focus ? #63303b : #4a222a) : primary ? (area.pressed ? #a92e3b : area.has-hover ? #ec5562 : #de4552) : area.has-hover || area.pressed || (root.navigation-tab && keys.has-focus) ? #252930 : #13161b;
     accessible-role: button; accessible-label: text; accessible-enabled: enabled;
     accessible-action-default => { if root.enabled { root.clicked(); } }
     forward-focus: keys;
-    Text {text: root.text; color: root.enabled ? #efeeec : #a4a8b1; font-size: root.text-size; horizontal-alignment: center; vertical-alignment: center; overflow: elide;}
+    label := Text {x: root.horizontal-padding; width: max(0px, parent.width - 2 * root.horizontal-padding); height: parent.height; text: root.text; color: root.enabled ? #efeeec : #a4a8b1; font-size: root.text-size; horizontal-alignment: center; vertical-alignment: center; overflow: elide;}
     keys := FocusScope {
         enabled: root.enabled; focus-on-tab-navigation: root.tab-stop;
         key-pressed(e) => {if e.text == " " || e.text == Key.Return {root.clicked(); return accept;} return reject;}
@@ -42,7 +45,7 @@ component Choice inherits Rectangle {
     accessible-role: combobox; accessible-value: current-index >= 0 ? model[current-index] : "";
     accessible-expandable: true; accessible-expanded: expanded; accessible-action-expand => {popup.show();}
     forward-focus: keys;
-    Caption {scale: root.scale; x: 14px * root.scale; width: parent.width - 45px * root.scale; text: root.current-index >= 0 ? root.model[root.current-index] : "";}
+    Caption {scale: root.scale; x: 12px * root.scale; width: max(0px, parent.width - 52px * root.scale); height: parent.height; text: root.current-index >= 0 ? root.model[root.current-index] : "";}
     Path {x: parent.width - 28px * root.scale; y: (parent.height - 10px * root.scale) / 2; width: 16px * root.scale; height: 10px * root.scale;
         viewbox-width:16;viewbox-height:10;commands:"M1 1 L8 8 L15 1";fill:transparent;stroke:#efeeec;stroke-width:2px * root.scale;
     }
@@ -73,7 +76,7 @@ component Choice inherits Rectangle {
                     for label[i] in root.model: Rectangle {
                         height: 38px * root.scale;
                         background: root.current-index == i ? #4a222a : area.has-hover ? #13161b : #252930;
-                        Caption {scale: root.scale; x: 12px * root.scale; width: parent.width - 24px * root.scale; text: label;}
+                        Caption {scale: root.scale; x: 12px * root.scale; width: max(0px, parent.width - 24px * root.scale); height: parent.height; text: label;}
                         area := TouchArea {clicked => {root.current-index = i; popup.close();keys.focus();}}
                     }
                 }
@@ -121,13 +124,12 @@ component OpacitySlider inherits Rectangle {
         moved => {if self.pressed {root.value = round(clamp(60 + 40 * (self.mouse-x - 8px * root.scale) / max(1px, self.width - 24px * root.scale), 60, 100));}}
     }
 }
-component TitleBar inherits Rectangle {
+component TitleBar inherits WindowMoveArea {
     in property <float> scale: 1;
     in property <string> heading;
     in property <string> subtitle;
-    callback close(); callback drag();
+    callback close();
     height: 88px * scale;
-    TouchArea {pointer-event(e) => {if e.kind == PointerEventKind.down && e.button == PointerEventButton.left {root.drag();}}}
     HorizontalLayout {spacing: 16px * root.scale;
         Image {width: 56px * root.scale; height: 56px * root.scale; source: @image-url("logo.png"); image-fit: contain;}
         VerticalLayout {spacing: 4px * root.scale;
@@ -177,14 +179,14 @@ export component SettingsWindow inherits Window {
         }
         key-pressed(e) => {if e.text == Key.Return {if !root.update-busy {root.action("save");} return accept;} return reject;}
         VerticalLayout {padding-left: 30px * root.scale; padding-right: 30px * root.scale; padding-top: 24px * root.scale; padding-bottom: 24px * root.scale; spacing: 7px * root.scale;
-            TitleBar {scale: root.scale; heading: "轻盘设置"; subtitle: "桌面看盘助手  ·  v" + root.version; close => {root.action("close");} drag => {root.action("drag");}}
+            TitleBar {scale: root.scale; heading: "轻盘设置"; subtitle: "桌面看盘助手  ·  v" + root.version; close => {root.action("close");}}
             Rule {}
             HorizontalLayout {height: 42px * root.scale; spacing: 10px * root.scale;
-                for page[i] in ["常规设置","字体大小","版本与更新"]: DialogButton {scale: root.scale; text: page; quiet: true;selected: root.tab == i;clicked => {root.tab = i;root.recording = -1;}}
+                for page[i] in ["常规设置","字体大小","版本与更新"]: DialogButton {scale: root.scale; text: page; quiet: true; navigation-tab: true; selected: root.tab == i;clicked => {root.tab = i;root.recording = -1;}}
                 Rectangle {}
             }
             ScrollView {
-                VerticalLayout {spacing: 10px * root.scale;
+                VerticalLayout {spacing: 10px * root.scale; padding-right: 14px + 12px * root.scale;
                     if root.tab == 0: VerticalLayout {spacing: 8px * root.scale;
                         Heading {scale: root.scale;text: "行情数据";}
                         HorizontalLayout {height: 48px * root.scale; Caption {scale: root.scale;text: "行情数据源";} Choice {scale: root.scale;width: 62%;accessible-label: "行情数据源";model: ["腾讯行情","东方财富"];current-index <=> root.source;}}
@@ -251,7 +253,7 @@ export component SearchWindow inherits Window {
         focus-on-tab-navigation:false;
         capture-key-pressed(e)=>{if e.text == Key.Escape {root.action("close");return accept;} return reject;}
         VerticalLayout {padding-left:28px * root.scale;padding-right:28px * root.scale;padding-top:24px * root.scale;padding-bottom:24px * root.scale;spacing:8px * root.scale;
-            TitleBar {scale:root.scale;heading:"添加自选";subtitle:"输入编号或首字母，如 600519、gzmt；多个编号用空格分隔。";close=>{root.action("close");}drag=>{root.action("drag");}}
+            TitleBar {scale:root.scale;heading:"添加自选";subtitle:"输入编号或首字母，如 600519、gzmt；多个编号用空格分隔。";close=>{root.action("close");}}
             HorizontalLayout {height:48px * root.scale;spacing:12px * root.scale;
                 Rectangle {background:#252930;border-radius:5px * root.scale;border-width:1px;border-color:input.has-focus ? #de4552 : #454a53;
                     TouchArea {clicked=>{input.focus();}}
@@ -268,10 +270,15 @@ export component SearchWindow inherits Window {
                 DialogButton {scale:root.scale;width:104px * root.scale;text:"搜索";enabled:!root.busy && root.query-ready;clicked=>{root.action("search");}}
             }
             Text {height:40px * root.scale;text:root.message;color:root.failed ? #fa949b : #a4a8b1;font-size:16px * root.scale;wrap:word-wrap;vertical-alignment:center;}
-            Rectangle {border-width:1px;border-color:#454a53;
+            results := Rectangle {border-width:1px;border-color:#454a53;
+                private property <length> content-width: max(0px, list.visible-width - 24px * root.scale - 14px);
                 VerticalLayout {padding:1px;spacing:0px;
                     Rectangle {height:34px * root.scale;background:#252930;
-                        HorizontalLayout {spacing:0px;Caption {scale:root.scale;width:48%;text:"　股票名称";font-size:16px * root.scale;color:#a4a8b1;} Caption {scale:root.scale;width:29%;text:"编号";font-size:16px * root.scale;color:#a4a8b1;} Caption {scale:root.scale;text:"市场";font-size:16px * root.scale;color:#a4a8b1;}}
+                        HorizontalLayout {x:12px * root.scale;y:0px;width:results.content-width;height:parent.height;spacing:0px;
+                            Rectangle {width:results.content-width * 0.48;Caption {scale:root.scale;x:35px * root.scale;width:max(0px,parent.width - self.x);height:parent.height;text:"股票名称";font-size:16px * root.scale;color:#a4a8b1;}}
+                            Caption {scale:root.scale;width:results.content-width * 0.29;text:"编号";font-size:16px * root.scale;color:#a4a8b1;}
+                            Caption {scale:root.scale;text:"市场";font-size:16px * root.scale;color:#a4a8b1;}
+                        }
                     }
                     listkeys := FocusScope {
                         key-pressed(e)=>{
@@ -289,8 +296,8 @@ export component SearchWindow inherits Window {
                             border-width:listkeys.has-focus && root.current == i ? 1px : 0px;border-color:#de4552;
                             accessible-role:list-item;accessible-label:row.name + " " + row.code + " " + row.market;
                             accessible-action-default=>{root.select(i,false,false,false);listkeys.focus();}
-                            HorizontalLayout {spacing:0px;
-                                Rectangle {width:48%;HorizontalLayout {spacing:7px * root.scale;
+                            HorizontalLayout {x:12px * root.scale;y:0px;width:results.content-width;height:parent.height;spacing:0px;
+                                Rectangle {width:results.content-width * 0.48;HorizontalLayout {spacing:7px * root.scale;
                                     Rectangle {width:28px * root.scale;Rectangle {x:4px * root.scale;y:(parent.height - self.height) / 2;width:22px * root.scale;height:self.width;background:row.chosen ? #de4552 : #252930;border-width:1px;border-color:#454a53;
                                         if row.chosen: Path {x:3px * root.scale;y:4px * root.scale;width:16px * root.scale;height:14px * root.scale;
                                             viewbox-width:16;viewbox-height:14;commands:"M1 7 L6 12 L15 1";fill:transparent;stroke:#efeeec;stroke-width:2px * root.scale;
@@ -298,13 +305,13 @@ export component SearchWindow inherits Window {
                                     }}
                                     Caption {scale:root.scale;text:row.name;}
                                 }}
-                                Caption {scale:root.scale;width:29%;text:row.code;} Caption {scale:root.scale;text:row.market;}
+                                Caption {scale:root.scale;width:results.content-width * 0.29;text:row.code;} Caption {scale:root.scale;text:row.market;}
                             }
                             area := TouchArea {
                                 pointer-event(e)=>{if e.kind == PointerEventKind.down && e.button == PointerEventButton.left {root.select(i,e.modifiers.control,e.modifiers.shift,false);listkeys.focus();}}
                                 double-clicked=>{root.action("add");}
                             }
-                            Rectangle {width:28px * root.scale;accessible-role:checkbox;accessible-label:row.name + " " + row.code;accessible-checkable:true;accessible-checked:row.chosen;accessible-action-default=>{root.toggle(i);}
+                            Rectangle {x:12px * root.scale;width:28px * root.scale;accessible-role:checkbox;accessible-label:row.name + " " + row.code;accessible-checkable:true;accessible-checked:row.chosen;accessible-action-default=>{root.toggle(i);}
                                 TouchArea {clicked=>{root.select(i,false,false,false);root.toggle(i);listkeys.focus();}double-clicked=>{root.action("add");}}
                             }
                         }}

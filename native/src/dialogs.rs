@@ -594,7 +594,6 @@ impl App {
         let current = self.settings_view.borrow();
         let Some(w) = current.as_ref() else { return };
         match cmd {
-            "drag" => drag_window(w.window()),
             "close" => {
                 drop(current);
                 self.close_settings();
@@ -736,11 +735,6 @@ impl App {
         });
         w.on_action(|command| {
             with_app(|a| match command.as_str() {
-                "drag" => {
-                    if let Some(w) = a.search_view.borrow().as_ref() {
-                        drag_window(w.window());
-                    }
-                }
                 "close" => a.close_search(),
                 "search" => {
                     a.debounce.stop();

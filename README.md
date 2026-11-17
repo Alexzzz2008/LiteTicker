@@ -2,23 +2,23 @@
 
 轻盘把股票行情、自选股和五档盘口放进一个可置顶的桌面行情小窗。鼠标停在股票名称上即可查看分时走势和最近成交。
 
-**当前正式版为 v2.0.1，适用于 Windows x64。** 程序使用 Rust + Slint 和软件渲染，无需安装 .NET 或 VC++ 运行库。[GitHub 正式版](https://github.com/Alexzzz2008/LiteTicker/releases/tag/v2.0.1)
+**当前正式版为 v2.0.2，适用于 Windows x64。** 程序使用 Rust + Slint 和软件渲染，无需安装 .NET 或 VC++ 运行库。[GitHub 正式版](https://github.com/Alexzzz2008/LiteTicker/releases/tag/v2.0.2)
 
 ## 下载与使用
 
 ### 首次安装（推荐）
 
-1. 下载 [Windows 安装包](https://github.com/Alexzzz2008/LiteTicker/releases/download/v2.0.1/LiteTicker-win.zip)。如果 GitHub 下载缓慢，可用[代理下载](https://gh-proxy.com/https://github.com/Alexzzz2008/LiteTicker/releases/download/v2.0.1/LiteTicker-win.zip)。
+1. 下载 [Windows 安装包](https://github.com/Alexzzz2008/LiteTicker/releases/download/v2.0.2/LiteTicker-win.zip)。如果 GitHub 下载缓慢，可用[代理下载](https://gh-proxy.com/https://github.com/Alexzzz2008/LiteTicker/releases/download/v2.0.2/LiteTicker-win.zip)。
 2. 右键 ZIP，选择 **全部解压**，然后双击解压目录中的 **`install.cmd`**。安装器会校验程序、创建桌面快捷方式并启动轻盘。
 3. 下次双击桌面的 **“轻盘 · 桌面看盘助手”** 即可启动。新安装默认保存在 `%LOCALAPPDATA%\Programs\LiteTicker`。
 
 ### 免安装运行
 
-将单文件程序保存到准备长期使用的文件夹，双击 **`LiteTicker.exe`** 即可启动。也可以直接运行上述安装包里解压出的 EXE。[下载单文件程序](https://github.com/Alexzzz2008/LiteTicker/releases/download/v2.0.1/LiteTicker.exe) · [代理下载](https://gh-proxy.com/https://github.com/Alexzzz2008/LiteTicker/releases/download/v2.0.1/LiteTicker.exe)
+将单文件程序保存到准备长期使用的文件夹，双击 **`LiteTicker.exe`** 即可启动。也可以直接运行上述安装包里解压出的 EXE。[下载单文件程序](https://github.com/Alexzzz2008/LiteTicker/releases/download/v2.0.2/LiteTicker.exe) · [代理下载](https://gh-proxy.com/https://github.com/Alexzzz2008/LiteTicker/releases/download/v2.0.2/LiteTicker.exe)
 
-### 从 v2.0.0 更新
+### 从 v2.0.0 或 v2.0.1 更新
 
-在行情小窗右键打开 **设置 → 版本与更新**，点击 **检查更新**，看到 **v2.0.1** 后选择 **下载并重启**。重启后回到此页，确认“当前版本”为 v2.0.1。此次修复了股票列表置顶时遮住设置窗口的问题。
+在行情小窗右键打开 **设置 → 版本与更新**，点击 **检查更新**，看到 **v2.0.2** 后选择 **下载并重启**。重启后回到此页，确认“当前版本”为 v2.0.2。若旧版设置窗口的鼠标点击已经失效，可按 `Tab` 切换焦点，按空格打开对应标签或按钮。
 
 ### 从 v1.0.5 升级
 
@@ -38,11 +38,11 @@
 - **隐藏：**行情窗右键选 **“隐藏到托盘”**，或关闭窗口、按 `Alt+F4`。隐藏后暂停行情请求，程序仍在运行。
 - **重新显示：**双击任务栏右侧的轻盘托盘图标，或在托盘菜单选 **“显示 / 隐藏”**；默认 `Ctrl+Alt+Q` 也可显示／隐藏。托盘图标可能收在任务栏的 **^（显示隐藏的图标）** 中。
 - **完全退出：**托盘右键选 **“退出轻盘”**，或行情窗右键选 **“退出”**。升级或移动 EXE 前先完全退出。
-- **确认版本：**行情窗右键选 **“设置”**，或托盘选 **“设置 / 快捷键”**，进入 **“版本与更新”**，查看 **“当前版本”**。本次升级完成后应显示 **v2.0.1**；以后以下载发布页的版本号为准。
+- **确认版本：**行情窗右键选 **“设置”**，或托盘选 **“设置 / 快捷键”**，进入 **“版本与更新”**，查看 **“当前版本”**。本次升级完成后应显示 **v2.0.2**；以后以下载发布页的版本号为准。
 
 ## 体积与内存
 
-Windows x64 单文件程序约 **11.7 MiB**，ZIP 安装包约 **6.1 MiB**。作为对照，v2.0.0 的 GitHub 下载件分别为 12,253,696 和 6,447,624 字节。1 MiB = 1,048,576 字节。
+Windows x64 单文件程序约 **11.7 MiB**，ZIP 安装包约 **6.2 MiB**。作为对照，v2.0.1 的 GitHub 下载件分别为 12,254,208 和 6,449,409 字节。1 MiB = 1,048,576 字节。
 
 | Windows 11 实盘场景 | 专用工作集（中位数） | 总工作集（中位数） | 样本数 |
 | --- | ---: | ---: | ---: |
@@ -77,7 +77,7 @@ Windows x64 单文件程序约 **11.7 MiB**，ZIP 安装包约 **6.1 MiB**。作
 - 名称、价格、涨跌幅和成交量之间保留均衡空白，价格与数量分别右对齐；添加或删除自选时自动调整高度，超过 12 行可滚动查看。
 - 窗口不显示按钮条和表头；左键拖动窗口，拖动边缘调整尺寸，右键管理自选。
 - 输入股票代码或拼音首字母，查看名称后选择添加；支持批量代码、删除自选、上移与下移，保存列表顺序。
-- 深色设置页使用红色强调、透明度滑条、置顶开关和可录入的快捷键；常规、字体、版本更新分区切换。
+- 设置分为常规、字体和版本更新三页。当前标签用深红底色标出，文字两侧留白。按钮、下拉选项和自选搜索结果也保留左右间距。拖动设置窗口后可以继续切页、调节透明度和录入快捷键。
 - 右键菜单、托盘菜单和添加自选页面统一为黑色、深红风格；菜单默认字号加大，并跟随全局字号缩放。
 - 全局字号可调，行情列表和盘口可分别覆盖；字号与布局一起调整，保存后应用。
 - 设置内显示当前版本，支持启动时自动检查和手动检查更新；下载校验通过后可重启更新，保留自选股和设置。

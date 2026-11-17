@@ -15,7 +15,16 @@ v2.0.0 使用 Rust 与 Slint 构建 Windows x64 单文件。发布候选在 Wind
 - 2.0 及以后使用正式 GitHub Releases，下载时核验官方来源、大小、SHA-256 和原生 PE 产品身份。1.x 的更新器要求 .NET 程序集，升级到 2.0 时须从托盘退出后运行新安装包或手动替换 EXE。
 - 用相同回放逐字段对照显示与交互，再做真实源验证和 Windows 性能测量。
 
-推送与 Cargo 版本相符的正式标签 vX.Y.Z 后，GitHub Actions 构建并发布 Windows x64 安装包和单文件程序。
+## 版本与发布约定
+
+每次交付递增补丁版本。发布按以下顺序在同一次交付中完成：
+
+1. 在工作分支完成修复和验收，同步 `Cargo.toml`、`Cargo.lock`、`LiteTicker.rc`、`LiteTicker.manifest` 的版本，并更新本版说明。
+2. 将 `vX.Y.Z` 标签指向已验收的提交，**先只推送版本标签，不提前更新 `main`**。标签触发 GitHub Actions，Windows runner 从标签对应的源码构建、测试并打包。
+3. 等待工作流成功，确认对应 Release 为正式版且被标为 Latest；实际下载并核对 `LiteTicker.exe`、`LiteTicker.exe.sha256`、`LiteTicker-win.zip`、`LiteTicker-win.zip.sha256`、`SHA256SUMS.txt` 的大小、摘要和版本，核对 ZIP 内程序与单文件一致。
+4. Release 与全部资产核对通过后，**再将 `main` 快进到同一个标签提交并推送**，完成源码、发布页和下载包的一致交付。
+
+构建或公开资产核验失败时保留原 `main`，修复并重新验收；已发布的版本标签不改指向。下一次交付继续递增版本，不把“标签已推送”当作发布完成。
 
 ## v2.0.0 桌面布局
 

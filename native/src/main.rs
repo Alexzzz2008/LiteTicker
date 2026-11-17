@@ -870,11 +870,6 @@ impl App {
                         a.refresh_details(false);
                         a.render_depth();
                     }
-                    "drag" => {
-                        if let Some(d) = &*a.depth.borrow() {
-                            drag_window(d.window());
-                        }
-                    }
                     _ => {}
                 })
             });
@@ -1192,16 +1187,6 @@ fn hwnd(window: &slint::Window) -> Option<windows_sys::Win32::Foundation::HWND> 
         Some(handle.hwnd.get() as _)
     } else {
         None
-    }
-}
-fn drag_window(_window: &slint::Window) {
-    #[cfg(windows)]
-    if let Some(h) = hwnd(_window) {
-        use windows_sys::Win32::UI::WindowsAndMessaging::*;
-        unsafe {
-            windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
-            PostMessageW(h, WM_NCLBUTTONDOWN, HTCAPTION as usize, 0);
-        }
     }
 }
 #[cfg(windows)]

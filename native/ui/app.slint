@@ -9,12 +9,15 @@ component Action inherits Rectangle {
     in property <string> label;
     in property <bool> accent: false;
     in property <length> text-size: 19px;
+    private property <length> horizontal-padding: 12px * (text-size / 19px);
     callback activated();
-    border-width: 1px;
+    preferred-width: button-text.preferred-width + 2 * horizontal-padding;
+    min-width: self.preferred-width; horizontal-stretch: 0;
+    border-width: root.accent ? 0px : 1px;
     border-color: #42464f;
     border-radius: 3px;
-    background: accent ? #86202b : touch.has-hover ? #34373f : #24272d;
-    Text { text: root.label; color: #efeeec; font-size: root.text-size; horizontal-alignment: center; vertical-alignment: center; }
+    background: accent ? (focus.has-focus ? #9e2a37 : #86202b) : touch.has-hover || focus.has-focus ? #34373f : #24272d;
+    button-text := Text { x: root.horizontal-padding; width: max(0px, parent.width - 2 * root.horizontal-padding); height: parent.height; text: root.label; color: #efeeec; font-size: root.text-size; horizontal-alignment: center; vertical-alignment: center; }
     focus := FocusScope {
         key-pressed(event) => {
             if event.text == Key.Return || event.text == " " { root.activated(); return accept; }
@@ -46,7 +49,7 @@ export component MainWindow inherits Window {
     callback key-action(string);
     preferred-width: 550px * q-scale;
     preferred-height: (14px + 43px * max(1, min(12, rows.length))) * q-scale + 34px * g-scale;
-    property <length> quote-content-width: max(0px, list.visible-width - 8px * q-scale);
+    property <length> quote-content-width: max(0px, list.visible-width - 16px * q-scale);
     property <length> quote-gap: max(0px, (quote-content-width - 356px * q-scale) / 3);
     property <length> quote-price-end: 200px * q-scale + quote-gap;
     property <length> quote-change-end: quote-price-end + 86px * q-scale + quote-gap;
@@ -77,10 +80,10 @@ export component MainWindow inherits Window {
             for row[i] in root.rows: Rectangle {
                 height: 43px * root.q-scale;
                 background: i == root.selection ? #302f38 : transparent;
-                Text { x: 4px * root.q-scale; width: min(root.quote-name-width, max(0px, root.quote-price-end - min(quote-price.preferred-width, root.quote-price-width) - 8px * root.q-scale)); height: parent.height; text: row.name; color: #dedce0; overflow: elide; font-size: 28px * root.q-scale; vertical-alignment: center; }
-                quote-price := Text { x: 4px * root.q-scale + root.quote-price-end - root.quote-price-width; width: root.quote-price-width; height: parent.height; text: row.price; color: row.ink; overflow: elide; horizontal-alignment: right; vertical-alignment: center; font-family: "Consolas"; font-weight: 700; font-size: 28px * root.q-scale; }
-                Text { x: 4px * root.q-scale + root.quote-change-end - root.quote-change-width; width: root.quote-change-width; height: parent.height; text: row.change; color: row.ink; overflow: elide; horizontal-alignment: right; vertical-alignment: center; font-family: "Consolas"; font-weight: 700; font-size: 26px * root.q-scale; }
-                Text { x: 4px * root.q-scale + root.quote-content-width - root.quote-volume-width; width: root.quote-volume-width; height: parent.height; text: row.volume; color: #9898a3; overflow: elide; horizontal-alignment: right; vertical-alignment: center; font-family: "Consolas"; font-size: 22px * root.q-scale; }
+                Text { x: 8px * root.q-scale; width: min(root.quote-name-width, max(0px, root.quote-price-end - min(quote-price.preferred-width, root.quote-price-width) - 8px * root.q-scale)); height: parent.height; text: row.name; color: #dedce0; overflow: elide; font-size: 28px * root.q-scale; vertical-alignment: center; }
+                quote-price := Text { x: 8px * root.q-scale + root.quote-price-end - root.quote-price-width; width: root.quote-price-width; height: parent.height; text: row.price; color: row.ink; overflow: elide; horizontal-alignment: right; vertical-alignment: center; font-family: "Consolas"; font-weight: 700; font-size: 28px * root.q-scale; }
+                Text { x: 8px * root.q-scale + root.quote-change-end - root.quote-change-width; width: root.quote-change-width; height: parent.height; text: row.change; color: row.ink; overflow: elide; horizontal-alignment: right; vertical-alignment: center; font-family: "Consolas"; font-weight: 700; font-size: 26px * root.q-scale; }
+                Text { x: 8px * root.q-scale + root.quote-content-width - root.quote-volume-width; width: root.quote-volume-width; height: parent.height; text: row.volume; color: #9898a3; overflow: elide; horizontal-alignment: right; vertical-alignment: center; font-family: "Consolas"; font-size: 22px * root.q-scale; }
                 TouchArea {
                     width: parent.width; height: parent.height;
                     private property <bool> dragging: false;
@@ -142,7 +145,7 @@ export component DetailsWindow inherits Window {
         HorizontalLayout {
             height: 46px * root.scale; spacing: 8px * root.scale;
             Text { text: root.heading; color: #dedce0; font-size: 30px * root.scale; font-weight: 700; vertical-alignment: center;
-                TouchArea { pointer-event(e) => { if e.kind == PointerEventKind.down && e.button == PointerEventButton.left {root.command("drag");} } }
+                WindowMoveArea {}
             }
             Action {text-size: 19px * root.scale; width: 100px * root.scale; label: root.pinned ? "已固定" : "固定"; activated => {root.command("pin");}}
             Action {text-size: 19px * root.scale; width: 86px * root.scale; label: "关闭"; activated => {root.command("close");}}

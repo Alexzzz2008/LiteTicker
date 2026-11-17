@@ -2,6 +2,7 @@
 use super::*;
 use anyhow::{Context, ensure};
 use std::path::Path;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 fn capture(window: &slint::Window, file: &Path) -> Result<()> {
     let image = window.take_snapshot()?;
@@ -161,15 +162,243 @@ fn check_dialog_order(app: &App, window: &slint::Window, topmost: bool) -> Resul
     Ok(())
 }
 
+fn click_dialog(window: &slint::Window, x: f32, y: f32) -> Result<()> {
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::UI::{HiDpi::SetThreadDpiAwarenessContext, WindowsAndMessaging::*};
+        let h = hwnd(window).context("缺少输入目标窗口")?;
+        let old = SetThreadDpiAwarenessContext(-4_isize as _);
+        let at = ((x.round() as u16 as u32) | ((y.round() as u16 as u32) << 16)) as isize;
+        // winit takes click positions from the preceding mouse move, not button lParam.
+        let sent = PostMessageW(h, WM_MOUSEMOVE, 0, at) != 0
+            && PostMessageW(h, WM_LBUTTONDOWN, 1, at) != 0
+            && PostMessageW(h, WM_LBUTTONUP, 0, at) != 0;
+        SetThreadDpiAwarenessContext(old);
+        ensure!(sent, "无法发送弹窗鼠标输入");
+    }
+    #[cfg(not(windows))]
+    {
+        use slint::platform::{PointerEventButton, WindowEvent};
+        let position =
+            slint::LogicalPosition::new(x / window.scale_factor(), y / window.scale_factor());
+        window.dispatch_event(WindowEvent::PointerMoved { position });
+        window.dispatch_event(WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        });
+        window.dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        });
+    }
+    Ok(())
+}
+
+// The OS move loop can consume client-up. A following tab click must still work.
+fn nonclient_title_release(window: &slint::Window, scale: f32) -> Result<Arc<AtomicU8>> {
+    let state = Arc::new(AtomicU8::new(0));
+    #[cfg(windows)]
+    {
+        let handle = hwnd(window).context("缺少标题拖动目标")? as isize;
+        let completed = state.clone();
+        std::thread::spawn(move || unsafe {
+            use windows_sys::Win32::{
+                Foundation::POINT,
+                Graphics::Gdi::ClientToScreen,
+                UI::{HiDpi::SetThreadDpiAwarenessContext, WindowsAndMessaging::*},
+            };
+            let h = handle as _;
+            let old = SetThreadDpiAwarenessContext(-4_isize as _);
+            let sent = (|| {
+                let mut owner = 0;
+                GetWindowThreadProcessId(h, &mut owner);
+                if owner != std::process::id() {
+                    return false;
+                }
+                let pack =
+                    |x: i32, y: i32| ((x as u16 as u32) | ((y as u16 as u32) << 16)) as isize;
+                let first = pack((255. * scale).round() as i32, (64. * scale).round() as i32);
+                let mut last = POINT {
+                    x: (273. * scale).round() as i32,
+                    y: (73. * scale).round() as i32,
+                };
+                if PostMessageW(h, WM_MOUSEMOVE, 0, first) == 0 {
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(120));
+                if PostMessageW(h, WM_LBUTTONDOWN, 1, first) == 0 {
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(120));
+                if PostMessageW(h, WM_MOUSEMOVE, 1, pack(last.x, last.y)) == 0 {
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(80));
+                if ClientToScreen(h, &mut last) == 0 {
+                    return false;
+                }
+                // Intentionally no WM_LBUTTONUP: reproduce release in the native move loop.
+                PostMessageW(h, WM_NCLBUTTONUP, HTCAPTION as usize, pack(last.x, last.y)) != 0
+            })();
+            SetThreadDpiAwarenessContext(old);
+            completed.store(if sent { 1 } else { 2 }, Ordering::Release);
+        });
+    }
+    #[cfg(not(windows))]
+    {
+        click_dialog(window, 255. * scale, 64. * scale)?;
+        state.store(1, Ordering::Release);
+    }
+    Ok(state)
+}
+
+fn checked_toggle_position(w: &SettingsWindow) -> Result<(f32, f32)> {
+    let image = w.window().take_snapshot()?;
+    let scale = w.get_scale() * w.window().scale_factor();
+    let width = image.width() as usize;
+    let mut bounds = (usize::MAX, usize::MAX, 0, 0);
+    for (index, pixel) in image.as_bytes().chunks_exact(4).enumerate() {
+        let (x, y) = (index % width, index / width);
+        if x > width / 2
+            && (y as f32) > 500. * scale
+            && (y as f32) < 565. * scale
+            && pixel[..3] == [222, 69, 82]
+        {
+            bounds.0 = bounds.0.min(x);
+            bounds.1 = bounds.1.min(y);
+            bounds.2 = bounds.2.max(x);
+            bounds.3 = bounds.3.max(y);
+        }
+    }
+    ensure!(bounds.0 != usize::MAX, "未找到可见置顶开关");
+    Ok((
+        ((bounds.0 + bounds.2) as f32) / 2.,
+        ((bounds.1 + bounds.3) as f32) / 2.,
+    ))
+}
+
+#[derive(Default)]
+struct SettingsInput {
+    step: u8,
+    quote_before: i32,
+    toggle: (f32, f32),
+    title_release: Option<Arc<AtomicU8>>,
+}
+
+fn check_settings_inputs(app: &Rc<App>, out: &Path, input: &mut SettingsInput) -> Result<bool> {
+    if input.step == 7 {
+        ensure!(app.settings_view.borrow().is_none(), "取消按钮没有关闭设置");
+        ensure!(
+            app.settings.borrow().quote_font_percent == input.quote_before
+                && app.settings.borrow().always_on_top,
+            "取消提交了未保存的设置"
+        );
+        app.command("settings");
+    } else if input.step == 11 {
+        ensure!(app.settings_view.borrow().is_none(), "保存按钮没有关闭设置");
+        ensure!(
+            app.settings.borrow().quote_font_percent == 110 && !app.settings.borrow().always_on_top,
+            "鼠标保存没有应用字号/置顶设置"
+        );
+        return Ok(true);
+    } else {
+        let w = app
+            .settings_view
+            .borrow()
+            .as_ref()
+            .context("设置输入期间窗口消失")?
+            .clone_strong();
+        let scale = w.get_scale() * w.window().scale_factor();
+        // Logical design anchors, scaled by the actual dialog DPI and fitted font size.
+        let tab =
+            |index: usize| click_dialog(w.window(), [82., 196., 320.][index] * scale, 149. * scale);
+        let footer = |save: bool| {
+            click_dialog(
+                w.window(),
+                w.window().size().width as f32 - if save { 107. } else { 254. } * scale,
+                w.window().size().height as f32 - 52. * scale,
+            )
+        };
+        match input.step {
+            0 => {
+                #[cfg(windows)]
+                check_dialog_order(app, w.window(), true)?;
+                ensure!(w.get_tab() == 0 && w.get_topmost(), "设置初始页/置顶不正确");
+                input.quote_before = app.settings.borrow().quote_font_percent;
+                input.toggle = checked_toggle_position(&w)?;
+                capture(w.window(), &out.join("settings.png"))?;
+                input.title_release = Some(nonclient_title_release(w.window(), scale)?);
+            }
+            1 => {
+                ensure!(
+                    input
+                        .title_release
+                        .as_ref()
+                        .context("标题输入未开始")?
+                        .load(Ordering::Acquire)
+                        == 1,
+                    "标题非客户区释放输入未完成"
+                );
+                tab(1)?;
+            }
+            2 => {
+                ensure!(
+                    w.get_tab() == 1,
+                    "标题拖动释放后字体页不能点击，可能仍有鼠标grab"
+                );
+                capture(w.window(), &out.join("settings-font.png"))?;
+                // Preserve the existing save/cancel font fixture; pages and buttons use pointer input.
+                w.set_quote_index(4);
+                tab(2)?;
+            }
+            3 => {
+                ensure!(w.get_tab() == 2, "版本页不能点击");
+                capture(w.window(), &out.join("settings-version.png"))?;
+                tab(0)?;
+            }
+            4 => {
+                ensure!(w.get_tab() == 0, "常规页不能点击");
+                click_dialog(w.window(), input.toggle.0, input.toggle.1)?;
+            }
+            5 => {
+                ensure!(!w.get_topmost(), "置顶开关第一次点击无效");
+                click_dialog(w.window(), input.toggle.0, input.toggle.1)?;
+            }
+            6 => {
+                ensure!(w.get_topmost(), "置顶开关第二次点击没有还原");
+                footer(false)?;
+            }
+            8 => {
+                input.toggle = checked_toggle_position(&w)?;
+                click_dialog(w.window(), input.toggle.0, input.toggle.1)?;
+            }
+            9 => {
+                ensure!(!w.get_topmost(), "重新打开后置顶开关不能点击");
+                tab(1)?;
+            }
+            10 => {
+                ensure!(w.get_tab() == 1, "重新打开后字体页不能点击");
+                w.set_quote_index(4);
+                footer(true)?;
+            }
+            _ => unreachable!(),
+        }
+    }
+    input.step += 1;
+    Ok(false)
+}
+
 pub fn start(app: Rc<App>, out: PathBuf) -> Result<Timer> {
     std::fs::create_dir(&out).context("验收输出必须是新目录")?;
     let mut phase = -5_i32;
     let mut hidden_tick = 0;
+    let mut settings_input = SettingsInput::default();
     let timer = Timer::default();
     timer.start(TimerMode::Repeated, Duration::from_millis(1500), move || {
         if phase == -5 && app.tick.get() < 2 && app.start.elapsed() < Duration::from_secs(20) {
             return;
         }
+        let mut advance = true;
         let test = (|| -> Result<()> {
             match phase {
                 -5 => point_at_name(&app, 0),
@@ -249,16 +478,13 @@ pub fn start(app: Rc<App>, out: PathBuf) -> Result<Timer> {
                     }
                 }
                 3 => {
-                    let w = app.settings_view.borrow().as_ref().context("设置没有打开")?.clone_strong();
-                    #[cfg(windows)]
-                    check_dialog_order(&app, w.window(), true)?;
-                    capture(w.window(), &out.join("settings.png"))?;
-                    w.set_topmost(false);
-                    w.set_tab(1);
-                    w.set_quote_index(4);
-                    w.invoke_action("save".into());
-                    ensure!(app.settings.borrow().quote_font_percent == 110, "字号未生效");
-                    app.command("add");
+                    if check_settings_inputs(&app, &out, &mut settings_input)
+                        .with_context(|| format!("设置真实输入步骤{}", settings_input.step))?
+                    {
+                        app.command("add");
+                    } else {
+                        advance = false;
+                    }
                 }
                 4 => {
                     let w = app.search_view.borrow().as_ref().context("添加自选没有打开")?.clone_strong();
@@ -273,6 +499,7 @@ pub fn start(app: Rc<App>, out: PathBuf) -> Result<Timer> {
                     ensure!(w.get_matches().row_count() > 0, "无匹配结果");
                     w.invoke_toggle(0);
                     ensure!(w.get_count() == 1, "未显式勾选结果");
+                    w.invoke_select(0, false, false, false);
                     capture(w.window(), &out.join("search.png"))?;
                     w.invoke_action("close".into());
                     #[cfg(windows)]
@@ -313,7 +540,7 @@ pub fn start(app: Rc<App>, out: PathBuf) -> Result<Timer> {
                 }
                 _ => {
                     ensure!(app.visible.get() && app.tick.get() > hidden_tick, "托盘恢复后未刷新");
-                    std::fs::write(out.join("result.txt"), "PASS quote replay, 550x564 geometry, hover before and after click, pinned hover, price columns stable across lot widths and quantities at both table edges, depth and chart modes, settings save, explicit search, opacity and topmost, close-to-tray and restore")?;
+                    std::fs::write(out.join("result.txt"), "PASS quote replay, 550x564 geometry, hover before and after click, pinned hover, price columns stable across lot widths and quantities at both table edges, depth and chart modes, settings tabs after title drag, toggle, cancel and save, explicit search, opacity and topmost, close-to-tray and restore")?;
                     app.command("exit");
                 }
             }
@@ -323,7 +550,7 @@ pub fn start(app: Rc<App>, out: PathBuf) -> Result<Timer> {
             let _ = std::fs::write(out.join("result.txt"), format!("FAIL phase {phase}: {error:#}"));
             std::process::exit(1);
         }
-        phase += 1;
+        if advance { phase += 1; }
     });
     Ok(timer)
 }
