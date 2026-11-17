@@ -1,17 +1,160 @@
+import { ScrollView, ListView } from "std-widgets.slint";
+export { SettingsWindow, SearchWindow } from "dialogs.slint";
+
+export struct QuoteRow { name: string, price: string, change: string, volume: string, ink: color }
+export struct LadderRow { label: string, price: string, size: string, ink: color }
+export struct TradeRow { time: string, price: string, size: string, ink: color }
+
+component Action inherits Rectangle {
+    in property <string> label;
+    in property <bool> accent: false;
+    in property <length> text-size: 19px;
+    callback activated();
+    border-width: 1px;
+    border-color: #42464f;
+    border-radius: 3px;
+    background: accent ? #86202b : touch.has-hover ? #34373f : #24272d;
+    Text { text: root.label; color: #efeeec; font-size: root.text-size; horizontal-alignment: center; vertical-alignment: center; }
+    touch := TouchArea { clicked => { root.activated(); } }
+    accessible-role: button;
+    accessible-label: label;
+    accessible-action-default => { root.activated(); }
+}
+
 export component MainWindow inherits Window {
-    title: "轻盘 · 桌面看盘助手";
+    title: "轻盘 · 桌面看盘助手（预览）";
     no-frame: true;
     background: #1d1c20;
     default-font-family: "Microsoft YaHei UI";
-    default-font-size: 26px;
-    width: 550px;
-    height: 294px;
-    min-width: 480px;
-    min-height: 110px;
-    Text {
-        x: 12px;
-        y: 12px;
-        text: "贵州茅台　平安银行　−1.25%　万手";
-        color: #dedce0;
+    in property <float> q-scale: 1;
+    in property <float> g-scale: 1;
+    in property <[QuoteRow]> rows;
+    in property <string> footer;
+    in-out property <int> selection: -1;
+    callback select-row(int);
+    callback open-row(int);
+    callback hover-row(int);
+    callback context(int);
+    callback drag();
+    callback key-action(string);
+    preferred-width: 550px * q-scale;
+    preferred-height: (14px + 43px * max(1, min(12, rows.length))) * q-scale + 34px * g-scale;
+    min-width: 480px * q-scale;
+    min-height: 76px * q-scale + 34px * g-scale;
+    keys := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Return { root.open-row(root.selection); return accept; }
+            if event.text == Key.Delete { root.key-action("delete"); return accept; }
+            if event.text == Key.F5 { root.key-action("refresh"); return accept; }
+            if event.text == Key.UpArrow || event.text == Key.DownArrow {
+                if event.modifiers.control { root.key-action(event.text == Key.UpArrow ? "up" : "down"); }
+                else if root.rows.length > 0 { root.select-row(max(0, min(root.rows.length - 1, root.selection + (event.text == Key.UpArrow ? -1 : 1)))); }
+                return accept;
+            }
+            return reject;
+        }
     }
+    forward-focus: keys;
+    VerticalLayout {
+        padding-left: 8px * root.q-scale; padding-right: 8px * root.q-scale; padding-top: 8px * root.q-scale;
+        list := ListView {
+            for row[i] in root.rows: Rectangle {
+                height: 43px * root.q-scale;
+                background: i == root.selection ? #302f38 : transparent;
+                HorizontalLayout {
+                    padding-left: 4px; padding-right: 4px;
+                    Text { text: row.name; color: #dedce0; horizontal-stretch: 34; width: parent.width * 0.29; overflow: elide; font-size: 28px * root.q-scale; vertical-alignment: center; }
+                    Text { text: row.price; color: row.ink; width: parent.width * 0.24; horizontal-alignment: right; vertical-alignment: center; font-family: "Consolas"; font-weight: 700; font-size: 28px * root.q-scale; }
+                    Text { text: row.change; color: row.ink; width: parent.width * 0.22; horizontal-alignment: right; vertical-alignment: center; font-family: "Consolas"; font-weight: 700; font-size: 26px * root.q-scale; }
+                    Text { text: row.volume; color: #9898a3; horizontal-alignment: right; vertical-alignment: center; font-family: "Consolas"; font-size: 22px * root.q-scale; }
+                }
+                TouchArea {
+                    changed has-hover => { root.hover-row(self.has-hover ? i : -1); }
+                    pointer-event(event) => {
+                        if event.kind == PointerEventKind.down {
+                            keys.focus(); root.select-row(i);
+                            if event.button == PointerEventButton.right { root.context(i); }
+                            else if event.button == PointerEventButton.left {root.drag();}
+                        }
+                    }
+                    double-clicked => { root.open-row(i); }
+                }
+            }
+        }
+        Rectangle {
+            height: 34px * root.g-scale;
+            Text { x: 4px; text: root.footer; font-size: 16px * root.g-scale; color: #9898a3; vertical-alignment: center; overflow: elide; }
+            TouchArea { pointer-event(e) => { if e.kind == PointerEventKind.down { if e.button == PointerEventButton.right {root.context(root.selection);} else if e.button == PointerEventButton.left {root.drag();} } } }
+        }
+    }
+}
+export component DetailsWindow inherits Window {
+    title: "轻盘盘口"; no-frame: true; background: #1d1c20;
+    default-font-family: "Microsoft YaHei UI";
+    in property <float> scale: 1;
+    in property <string> heading;
+    in property <string> price;
+    in property <color> ink;
+    in property <string> status;
+    in property <string> trades-title;
+    in property <[LadderRow]> ladder;
+    in property <[TradeRow]> trades;
+    in property <image> chart;
+    in property <bool> pinned;
+    in property <bool> daily;
+    in property <bool> amount;
+    callback command(string);
+    callback hover(bool);
+    preferred-width: 960px * scale; preferred-height: 840px * scale;
+    min-width: 540px * scale; min-height: 470px * scale;
+    touch := TouchArea { changed has-hover => { root.hover(self.has-hover); } }
+    VerticalLayout {
+        padding: 18px; spacing: 4px;
+        HorizontalLayout {
+            height: 46px * root.scale; spacing: 8px;
+            Text { text: root.heading; color: #dedce0; font-size: 30px * root.scale; font-weight: 700; vertical-alignment: center;
+                TouchArea { pointer-event(e) => { if e.kind == PointerEventKind.down && e.button == PointerEventButton.left {root.command("drag");} } }
+            }
+            Action {width: 100px; label: root.pinned ? "已固定" : "固定"; activated => {root.command("pin");}}
+            Action {width: 86px; label: "关闭"; activated => {root.command("close");}}
+        }
+        Text { height: 46px * root.scale; text: root.price; color: root.ink; font-size: 32px * root.scale; font-weight: 700; }
+        HorizontalLayout {
+            height: 39px * root.scale; spacing: 8px;
+            Action {width: 98px; label: "分时"; accent: !root.daily; activated => {root.command("minute");}}
+            Action {width: 98px; label: "日 K"; accent: root.daily; activated => {root.command("daily");}}
+            Text {text: root.daily ? "日 K" : "白线 价格 · 金线 均价"; color: #a4a8b1; vertical-alignment: center;}
+        }
+        Image {source: root.chart; image-fit: fill; vertical-stretch: 2; min-height: 60px;}
+        HorizontalLayout {
+            height: 28px * root.scale;
+            for label in ["09:30","10:30","11:30 / 13:00","14:00","15:00"]: Text {text: root.daily ? "" : label; horizontal-alignment: center; color: #a4a8b1;}
+        }
+        HorizontalLayout {
+            vertical-stretch: 3; spacing: 20px;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                HorizontalLayout { height: 36px * root.scale;
+                    Text {text: root.amount ? "五档盘口 · 金额" : "五档盘口 · 手"; color: #b4b3bc; vertical-alignment: center;}
+                    Action {width: 90px; label: root.amount ? "看手数" : "看金额"; activated => {root.command("unit");}}
+                }
+                for level in root.ladder: HorizontalLayout {
+                    Text {text: level.label; color: #a4a8b1;}
+                    Text {text: level.price; color: level.ink; font-family: "Consolas"; horizontal-alignment: right;}
+                    Text {text: level.size; color: #a4a8b1; font-family: "Consolas"; horizontal-alignment: right;}
+                }
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                Text {height: 36px * root.scale; text: root.trades-title; color: #b4b3bc; vertical-alignment: center;}
+                for trade in root.trades: HorizontalLayout {
+                    Text {text: trade.time; color: #a4a8b1; font-family: "Consolas";}
+                    Text {text: trade.price; color: trade.ink; horizontal-alignment: right; font-family: "Consolas";}
+                    Text {text: trade.size; color: #a4a8b1; horizontal-alignment: right; font-family: "Consolas";}
+                }
+            }
+        }
+        Text {height: 26px; text: root.status; color: #a4a8b1; overflow: elide;}
+    }
+    default-font-size: min(24px * scale, root.height / 33);
 }

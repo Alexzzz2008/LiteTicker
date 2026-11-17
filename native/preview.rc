@@ -1,0 +1,16 @@
+1 ICON "../assets/liteticker.ico"
+1 VERSIONINFO
+FILEVERSION 1,0,6,0
+PRODUCTVERSION 1,0,6,0
+BEGIN
+ BLOCK "StringFileInfo"
+ BEGIN
+  BLOCK "040904b0"
+  BEGIN
+   VALUE "FileDescription", "LiteTicker native preview\0"
+   VALUE "ProductName", "LiteTicker Preview\0"
+   VALUE "ProductVersion", "1.0.6-preview.1\0"
+   VALUE "OriginalFilename", "LiteTicker-preview.exe\0"
+  END
+ END
+END
