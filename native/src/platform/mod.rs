@@ -1,6 +1,6 @@
 //! Windows desktop integration. Construct after `show()` has created the HWND.
 //! Keep this object on the UI thread and drop it before the Slint window.
-//! Preview has a separate instance identity and never registers global hotkeys.
+//! Preview uses its own instance identity. Offline replay skips hotkey registration.
 mod policy;
 mod windows;
 

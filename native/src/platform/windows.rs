@@ -139,12 +139,12 @@ struct NativeState {
     preview: bool,
     alive: Rc<Cell<bool>>,
     hotkeys: RefCell<Hotkeys>,
+    enable_hotkeys: bool,
     font: Cell<HFONT>,
     font_pixels: Cell<i32>,
     brush: HBRUSH,
     icon: HICON,
     taskbar_created: u32,
-    positioned: Cell<bool>,
     topmost: Cell<bool>,
 }
 
@@ -159,6 +159,7 @@ impl DesktopPlatform {
         window: &slint::Window,
         callback: impl Fn(DesktopCommand) + 'static,
         preview: bool,
+        enable_hotkeys: bool,
     ) -> Result<Self> {
         let provider = window.window_handle();
         let hwnd = match provider
@@ -201,12 +202,12 @@ impl DesktopPlatform {
             preview,
             alive,
             hotkeys: RefCell::new(Hotkeys::default()),
+            enable_hotkeys,
             font: Cell::new(null_mut()),
             font_pixels: Cell::new(22),
             brush,
             icon,
             taskbar_created: unsafe { RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()) },
-            positioned: Cell::new(false),
             topmost: Cell::new(
                 unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } & WS_EX_TOPMOST as isize != 0,
             ),
@@ -254,6 +255,19 @@ impl DesktopPlatform {
         Ok(platform)
     }
 
+    pub fn notify_update(&self, version: &str) {
+        let mut data = self.state.tray_data();
+        data.uFlags = NIF_INFO;
+        let title = wide(&format!("轻盘有新版本 v{version}"));
+        let text = wide("点击进入设置，下载并重启更新。");
+        let n = title.len().min(data.szInfoTitle.len() - 1);
+        data.szInfoTitle[..n].copy_from_slice(&title[..n]);
+        data.szInfo[..text.len()].copy_from_slice(&text);
+        data.dwInfoFlags = NIIF_INFO;
+        unsafe {
+            Shell_NotifyIconW(NIM_MODIFY, &data);
+        }
+    }
     /// A hotkey conflict leaves both old registrations and appearance unchanged.
     pub fn apply_settings(&self, settings: &AppSettings) -> Result<()> {
         let state = &self.state;
@@ -267,7 +281,7 @@ impl DesktopPlatform {
         } else {
             None
         };
-        let key_result = if state.preview {
+        let key_result = if !state.enable_hotkeys {
             Ok(())
         } else {
             state.hotkeys.borrow_mut().apply(
@@ -332,17 +346,6 @@ impl DesktopPlatform {
             ) == 0
             {
                 return Err(std::io::Error::last_os_error()).context("无法设置窗口置顶");
-            }
-            if !state.positioned.replace(true) {
-                SetWindowPos(
-                    state.hwnd,
-                    null_mut(),
-                    settings.x,
-                    settings.y,
-                    0,
-                    0,
-                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-                );
             }
         }
         Ok(())
@@ -537,12 +540,16 @@ unsafe extern "system" fn subclass(
             }
             TRAY => {
                 match lp as u32 & 0xffff {
+                    NIN_BALLOONUSERCLICK => {
+                        defer(state.id, Action::Command(DesktopCommand::ShowUpdates))
+                    }
                     WM_CONTEXTMENU | WM_RBUTTONUP => state.menu(true, false),
                     WM_LBUTTONDBLCLK | NIN_KEYSELECT => defer(state.id, Action::Activate),
                     _ => {}
                 }
                 return 0;
             }
+            WM_MOVE | WM_SIZE => defer(state.id, Action::Command(DesktopCommand::PositionDetails)),
             WM_CLOSE => {
                 defer(state.id, Action::Hide);
                 return 0;

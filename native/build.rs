@@ -10,6 +10,7 @@ fn main() {
         if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
             println!("cargo:rerun-if-changed=../assets/liteticker.ico");
             println!("cargo:rerun-if-changed=preview.rc");
+            println!("cargo:rerun-if-changed=preview.manifest");
             embed_resource::compile("preview.rc", embed_resource::NONE)
                 .manifest_required()
                 .unwrap();

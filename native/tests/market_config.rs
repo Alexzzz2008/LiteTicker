@@ -271,3 +271,27 @@ fn shortcut_disabled_duplicate_and_invalid_values_match_existing_contract() {
     store.save(&settings).unwrap();
     assert_eq!(store.load().unwrap().refresh_shortcut, 0);
 }
+
+#[test]
+fn first_preview_copies_installed_settings_once_and_keeps_stores_independent() {
+    let tmp = Temporary::new();
+    let installed = SettingsStore::new(tmp.0.join("stable"));
+    let preview = SettingsStore::new(tmp.0.join("preview"));
+    assert_eq!(
+        preview.load_preview(&installed).unwrap().symbols,
+        AppSettings::default().symbols
+    );
+    assert!(!installed.file_path().exists());
+    let mut settings = AppSettings {
+        x: -200,
+        symbols: vec!["600519.SH".into()],
+        ..Default::default()
+    };
+    installed.save(&settings).unwrap();
+    let before = fs::read(installed.file_path()).unwrap();
+    assert_eq!(preview.load_preview(&installed).unwrap().x, -200);
+    settings.x = 123;
+    preview.save(&settings).unwrap();
+    assert_eq!(preview.load_preview(&installed).unwrap().x, 123);
+    assert_eq!(fs::read(installed.file_path()).unwrap(), before);
+}

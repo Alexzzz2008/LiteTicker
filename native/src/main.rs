@@ -23,6 +23,9 @@ use tokio_util::sync::CancellationToken;
 slint::include_modules!();
 mod chart;
 mod dialogs;
+mod replay_check;
+mod updates_ui;
+use liteticker_native::update::{self, DownloadedUpdate, Release};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -35,7 +38,9 @@ enum Completion {
     Quotes(QuoteRequest, Result<Vec<Quote>, FetchFailure>),
     Details(DetailsRequest, bool, Result<MarketDetails, String>),
     Search(u64, Result<Vec<SymbolMatch>, String>),
-    Update(u64, Result<String, String>),
+    Update(u64, Result<Option<Release>, String>),
+    Progress(u64, u8),
+    Download(u64, Result<DownloadedUpdate, String>),
 }
 thread_local! {static ACTIVE: RefCell<Weak<App>> = RefCell::new(Weak::new());}
 fn deliver(message: Completion) {
@@ -61,6 +66,9 @@ struct App {
     recorded: Cell<[u32; 2]>,
     update_gen: Cell<u64>,
     update_token: RefCell<Option<CancellationToken>>,
+    available: RefCell<Option<Release>>,
+    update_message: RefCell<String>,
+    update_latest: RefCell<String>,
     settings: RefCell<AppSettings>,
     store: SettingsStore,
     quotes: RefCell<QuoteSession>,
@@ -79,7 +87,10 @@ struct App {
     quote_timer: Timer,
     detail_timer: Timer,
     pending: Cell<bool>,
+    quote_started: Cell<Instant>,
+    platform_message: RefCell<String>,
     visible: Cell<bool>,
+    fitted_scale: Cell<f32>,
     replay: Option<Replay>,
     tick: Cell<u64>,
     runtime: Runtime,
@@ -100,6 +111,9 @@ fn ink(delta: Decimal, fresh: bool) -> Color {
     Color::from_rgb_u8(rgb.0, rgb.1, rgb.2)
 }
 fn signed(n: Decimal) -> String {
+    if n.is_zero() {
+        return "0.00%".into();
+    }
     format!(
         "{:+.2}%",
         n.round_dp_with_strategy(2, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
@@ -109,8 +123,26 @@ fn percent(local: i32, global: i32) -> f32 {
     (if local == 0 { global } else { local }) as f32 / 100.
 }
 fn main() {
+    if let Some(code) = update::run_helper_if_requested() {
+        std::process::exit(code);
+    }
     if let Err(e) = launch() {
         eprintln!("{e:#}");
+        let mut args = env::args_os().skip(1);
+        while let Some(arg) = args.next() {
+            if arg == "--after-native-update" {
+                std::process::exit(1);
+            }
+            if arg == "--verify-replay" {
+                if let Some(out) = args.next().map(PathBuf::from) {
+                    if std::fs::create_dir(&out).is_ok() {
+                        let _ =
+                            std::fs::write(out.join("result.txt"), format!("FAIL startup: {e:#}"));
+                    }
+                }
+                std::process::exit(1);
+            }
+        }
         #[cfg(windows)]
         {
             use windows_sys::Win32::UI::WindowsAndMessaging::*;
@@ -126,23 +158,39 @@ fn main() {
                 );
             }
         }
+        std::process::exit(1);
     }
 }
 fn launch() -> Result<()> {
     let mut args = env::args_os().skip(1);
     let mut file = None;
+    let mut verify = None;
     while let Some(arg) = args.next() {
         if arg == "--replay" {
             file = Some(PathBuf::from(
                 args.next().ok_or_else(|| anyhow::anyhow!("缺少回放文件"))?,
             ));
-        } else {
+        } else if arg == "--verify-replay" {
+            verify = Some(PathBuf::from(
+                args.next()
+                    .ok_or_else(|| anyhow::anyhow!("缺少验收输出目录"))?,
+            ));
+        } else if arg != "--after-native-update" {
             anyhow::bail!("未知参数 {:?}", arg);
         }
     }
+    anyhow::ensure!(
+        verify.is_none() || file.is_some(),
+        "验收命令需要指定回放文件"
+    );
     #[cfg(windows)]
-    let Some(_instance) = InstanceGuard::acquire(true)? else {
-        return Ok(());
+    let _instance = if file.is_some() {
+        None
+    } else {
+        let Some(instance) = InstanceGuard::acquire(true)? else {
+            return Ok(());
+        };
+        Some(instance)
     };
     let replay: Option<Replay> = file
         .as_ref()
@@ -150,13 +198,12 @@ fn launch() -> Result<()> {
         .transpose()?;
     let dir = env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
-        .unwrap_or_else(env::temp_dir)
-        .join("LiteTicker-preview");
-    let store = SettingsStore::new(dir);
+        .unwrap_or_else(env::temp_dir);
+    let store = SettingsStore::new(dir.join("LiteTicker-preview"));
     let mut settings = if replay.is_some() {
         AppSettings::default()
     } else {
-        store.load()?
+        store.load_preview(&SettingsStore::new(dir.join("LiteTicker")))?
     };
     if let Some(r) = &replay {
         settings.symbols = r.quotes.iter().map(|q| q.symbol.clone()).collect();
@@ -167,6 +214,8 @@ fn launch() -> Result<()> {
         .backend_name("winit".into())
         .renderer_name(if cfg!(feature = "renderer-skia") {
             "skia".into()
+        } else if cfg!(feature = "renderer-software") {
+            "software".into()
         } else {
             "femtovg-wgpu".into()
         })
@@ -188,6 +237,9 @@ fn launch() -> Result<()> {
         recorded: Default::default(),
         update_gen: Default::default(),
         update_token: Default::default(),
+        available: Default::default(),
+        update_message: Default::default(),
+        update_latest: RefCell::new("尚未检查".into()),
         settings: RefCell::new(settings.clone()),
         quotes: RefCell::new(QuoteSession::new(settings)),
         store,
@@ -206,7 +258,10 @@ fn launch() -> Result<()> {
         quote_timer: Default::default(),
         detail_timer: Default::default(),
         pending: Default::default(),
+        quote_started: Cell::new(Instant::now()),
+        platform_message: Default::default(),
         visible: Cell::new(true),
+        fitted_scale: Cell::new(0.),
         replay,
         tick: Default::default(),
         market: MarketClient::new()?,
@@ -220,10 +275,21 @@ fn launch() -> Result<()> {
     ACTIVE.with(|slot| *slot.borrow_mut() = Rc::downgrade(&app));
     app.wire();
     app.render();
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::HiDpi::GetDpiForSystem;
+        let dpi = unsafe { GetDpiForSystem() }.max(96) as f32 / 96.;
+        let settings = app.settings.borrow();
+        app.window
+            .set_q_scale(percent(settings.quote_font_percent, settings.global_font_percent) / dpi);
+        app.window
+            .set_g_scale(percent(0, settings.global_font_percent) / dpi);
+    }
     app.window.show()?;
-    app.fit();
     let next = app.clone();
-    slint::Timer::single_shot(Duration::ZERO, move || {
+    when_mapped(&app.window, move |_| {
+        next.fit();
+        next.restore_position();
         #[cfg(windows)]
         {
             let init = (|| -> Result<()> {
@@ -231,20 +297,67 @@ fn launch() -> Result<()> {
                     next.window.window(),
                     move |cmd| with_app(|a| a.desktop(cmd)),
                     true,
+                    next.replay.is_none(),
                 )?;
-                p.apply_settings(&next.settings.borrow())?;
+                let settings = next.settings.borrow();
+                if let Err(e) = p.apply_settings(&settings) {
+                    let mut fallback = settings.clone();
+                    fallback.toggle_shortcut = 0;
+                    fallback.refresh_shortcut = 0;
+                    p.apply_settings(&fallback)?;
+                    next.platform_message.replace(e.to_string());
+                }
                 next.platform.replace(Some(p));
                 Ok(())
             })();
             if let Err(error) = init {
-                next.window.set_footer(error.to_string().into());
-                return;
+                next.platform_message.replace(error.to_string());
+                next.render();
             }
         }
         next.refresh();
+        if next.replay.is_none() && next.settings.borrow().auto_check_updates {
+            slint::Timer::single_shot(Duration::from_secs(3), || {
+                with_app(|a| {
+                    if a.settings.borrow().auto_check_updates && a.update_gen.get() == 0 {
+                        a.check_update();
+                    }
+                })
+            });
+        }
     });
+    let _verifier = verify
+        .map(|out| replay_check::start(app.clone(), out))
+        .transpose()?;
     slint::run_event_loop_until_quit()?;
     Ok(())
+}
+// winit creates the HWND on its event loop, after Slint's show() returns.
+fn when_mapped<C: ComponentHandle + 'static>(component: &C, ready: impl FnOnce(C) + 'static) {
+    poll_mapped(component.as_weak(), 100, ready);
+}
+fn poll_mapped<C: ComponentHandle + 'static>(
+    weak: slint::Weak<C>,
+    remaining: usize,
+    ready: impl FnOnce(C) + 'static,
+) {
+    slint::Timer::single_shot(Duration::from_millis(25), move || {
+        let Some(component) = weak.upgrade() else {
+            return;
+        };
+        #[cfg(windows)]
+        if hwnd(component.window()).is_none() {
+            if remaining > 0 {
+                poll_mapped(weak, remaining - 1, ready);
+            } else {
+                with_app(|a| a.window.set_footer("窗口未完成初始化，请重新打开。".into()));
+            }
+            return;
+        }
+        if component.window().is_visible() {
+            ready(component);
+        }
+    });
 }
 fn with_app(f: impl FnOnce(&Rc<App>)) {
     ACTIVE.with(|slot| {
@@ -260,10 +373,11 @@ impl App {
     fn wire(self: &Rc<Self>) {
         self.window.on_select_row(|i| {
             with_app(|a| {
-                let s = a.settings.borrow();
-                if let Some(id) = s.symbols.get(i as usize) {
+                let id = a.settings.borrow().symbols.get(i as usize).cloned();
+                if let Some(id) = id {
                     a.selection.replace(Some(id.clone()));
                     a.window.set_selection(i);
+                    a.show_depth(&id, false);
                 }
             })
         });
@@ -299,17 +413,42 @@ impl App {
             slint::CloseRequestResponse::KeepWindowShown
         });
     }
+    fn restore_position(&self) {
+        let settings = self.settings.borrow();
+        let (mut x, mut y) = (settings.x, settings.y);
+        #[cfg(windows)]
+        unsafe {
+            use windows_sys::Win32::{Foundation::POINT, Graphics::Gdi::*};
+            let mut monitor: MONITORINFO = std::mem::zeroed();
+            monitor.cbSize = std::mem::size_of_val(&monitor) as u32;
+            if GetMonitorInfoW(
+                MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST),
+                &mut monitor,
+            ) != 0
+            {
+                let area = monitor.rcWork;
+                let size = self.window.window().size();
+                x = x.clamp(area.left, (area.right - size.width as i32).max(area.left));
+                y = y.clamp(area.top, (area.bottom - size.height as i32).max(area.top));
+            }
+        }
+        self.window
+            .window()
+            .set_position(slint::PhysicalPosition::new(x, y));
+    }
     fn fit(&self) {
         let s = self.settings.borrow();
         let q = percent(s.quote_font_percent, s.global_font_percent);
         let g = percent(0, s.global_font_percent);
-        self.window.set_q_scale(q);
-        self.window.set_g_scale(g);
+        let dpi = self.window.window().scale_factor().max(1.);
+        self.window.set_q_scale(q / dpi);
+        self.window.set_g_scale(g / dpi);
+        let previous = self.fitted_scale.replace(q);
         let old = self.window.window().size();
-        let width = if old.width == 0 {
+        let width = if old.width == 0 || previous == 0. {
             550.0 * q
         } else {
-            old.width as f32
+            old.width as f32 * q / previous
         };
         self.window.window().set_size(slint::PhysicalSize::new(
             width.max(480. * q) as u32,
@@ -382,6 +521,11 @@ impl App {
         if snap.error.is_some() {
             line.push_str(" · 更新失败");
         }
+        let warning = self.platform_message.borrow();
+        if !warning.is_empty() {
+            line.push_str(" · ");
+            line.push_str(&warning);
+        }
         self.window.set_footer(line.into());
     }
     fn refresh(self: &Rc<Self>) {
@@ -396,6 +540,7 @@ impl App {
             }
             return;
         };
+        self.quote_started.set(Instant::now());
         if let Some(replay) = &self.replay {
             let mut q = replay.quotes.clone();
             if let Some(first) = q.first_mut() {
@@ -432,6 +577,9 @@ impl App {
                 }
                 if changed {
                     self.render();
+                    if self.replay.is_some() && self.tick.get() == 2 {
+                        eprintln!("REPLAY_READY quotes={} ticks=2", self.rows.row_count());
+                    }
                     self.render_depth();
                 }
                 let secs = if self.pending.replace(false) {
@@ -441,10 +589,15 @@ impl App {
                 } else {
                     interval_seconds(&self.settings.borrow(), beijing_now()) as u64
                 };
+                let wait = if secs == 0 {
+                    Duration::ZERO
+                } else {
+                    Duration::from_secs(secs)
+                        .saturating_sub(self.quote_started.get().elapsed())
+                        .max(Duration::from_millis(100))
+                };
                 self.quote_timer
-                    .start(TimerMode::SingleShot, Duration::from_secs(secs), || {
-                        with_app(|a| a.refresh())
-                    });
+                    .start(TimerMode::SingleShot, wait, || with_app(|a| a.refresh()));
             }
             Completion::Details(r, trades, v) => {
                 let changed = (if trades { &self.trades } else { &self.details })
@@ -457,13 +610,12 @@ impl App {
                 }
             }
             Completion::Search(g, v) => self.finish_search(g, v),
-            Completion::Update(g, v) => {
-                if g == self.update_gen.get() {
-                    if let Some(w) = &*self.settings_view.borrow() {
-                        w.set_message(v.unwrap_or_else(|e| e).into());
-                    }
-                }
+            Completion::Update(g, v) => self.checked_update(g, v),
+            Completion::Progress(g, pct) if g == self.update_gen.get() => {
+                self.set_update_message(format!("正在下载更新… {pct}%"))
             }
+            Completion::Download(g, result) => self.downloaded_update(g, result),
+            Completion::Progress(..) => {}
         }
     }
     fn hide(&self) {
@@ -493,7 +645,10 @@ impl App {
             return;
         }
         match cmd {
-            "refresh" => self.refresh(),
+            "refresh" => {
+                self.refresh();
+                self.refresh_details(true);
+            }
             "toggle" => {
                 if self.visible.get() {
                     self.hide()
@@ -545,9 +700,37 @@ impl App {
     #[cfg(windows)]
     fn desktop(self: &Rc<Self>, cmd: DesktopCommand) {
         use DesktopCommand::*;
+        if matches!(cmd, ShowSettings | ShowUpdates | AddSymbols)
+            && !self.modal()
+            && !self.visible.get()
+        {
+            self.show();
+        }
         self.command(match cmd {
             ToggleVisibility => "toggle",
             ShowSettings => "settings",
+            PositionDetails => {
+                if self.detail_symbol.borrow().is_some() {
+                    if let Some(depth) = self.depth.borrow().as_ref() {
+                        adjust_depth_window(
+                            self.window.window(),
+                            depth.window(),
+                            &self.settings.borrow(),
+                            true,
+                        );
+                    }
+                }
+                return;
+            }
+            ShowUpdates => {
+                if !self.modal() {
+                    self.open_settings();
+                }
+                if let Some(w) = self.settings_view.borrow().as_ref() {
+                    w.set_tab(2);
+                }
+                return;
+            }
             AddSymbols => "add",
             Refresh => "refresh",
             ShowDetails => "depth",
@@ -583,6 +766,7 @@ impl App {
         {
             self.close_depth();
         }
+        self.platform_message.borrow_mut().clear();
         self.settings.replace(s.clone());
         self.quotes.borrow_mut().update_settings(s);
         self.render();
@@ -694,31 +878,51 @@ impl App {
         if first {
             let borrow = self.depth.borrow();
             let d = borrow.as_ref().unwrap();
-            let _ = d.show();
-            let p = self.window.window().position();
-            let w = self.window.window().size().width;
-            let s = self.settings.borrow();
-            let scale = percent(s.details_font_percent, s.global_font_percent);
-            d.set_scale(scale / d.window().scale_factor().max(1.));
+            let scale = {
+                let s = self.settings.borrow();
+                percent(s.details_font_percent, s.global_font_percent)
+            };
+            d.set_scale(scale / self.window.window().scale_factor().max(1.));
             let size = slint::PhysicalSize::new((960. * scale) as u32, (840. * scale) as u32);
             d.window().set_size(size);
-            d.window()
-                .set_position(slint::PhysicalPosition::new(p.x + w as i32 + 8, p.y));
-            #[cfg(windows)]
-            adjust_depth_window(self.window.window(), d.window(), &s, true);
+            let _ = d.show();
+            when_mapped(d, move |d| {
+                with_app(|app| {
+                    d.set_scale(scale / d.window().scale_factor().max(1.));
+                    d.window().set_size(size);
+                    #[cfg(windows)]
+                    adjust_depth_window(
+                        app.window.window(),
+                        d.window(),
+                        &app.settings.borrow(),
+                        true,
+                    );
+                })
+            });
         }
         self.refresh_details(false);
         self.render_depth();
+        self.arm_details_timer();
+    }
+    fn arm_details_timer(&self) {
         let s = self.settings.borrow();
         let sec = if self.replay.is_some() || is_trading_time(beijing_now()) {
             s.trade_refresh_seconds
         } else {
             30
         };
-        self.detail_timer
-            .start(TimerMode::Repeated, Duration::from_secs(sec as u64), || {
-                with_app(|a| a.refresh_details(false))
-            });
+        self.detail_timer.start(
+            TimerMode::SingleShot,
+            Duration::from_secs(sec as u64),
+            || {
+                with_app(|a| {
+                    if a.detail_symbol.borrow().is_some() {
+                        a.refresh_details(false);
+                        a.arm_details_timer();
+                    }
+                })
+            },
+        );
     }
     fn refresh_details(self: &Rc<Self>, force: bool) {
         let Some(id) = self.detail_symbol.borrow().clone() else {
@@ -732,7 +936,7 @@ impl App {
             let lane = if trades { &self.trades } else { &self.details };
             let daily = !trades && self.daily.get();
             lane.borrow_mut().select(Some(q.clone()), s.source, daily);
-            let recent_seconds = if is_trading_time(beijing_now()) {
+            let recent_seconds = if self.replay.is_some() || is_trading_time(beijing_now()) {
                 s.trade_refresh_seconds
             } else {
                 30
@@ -785,17 +989,25 @@ impl App {
         let Some(id) = self.detail_symbol.borrow().clone() else {
             return;
         };
-        let Some(q) = self.quotes.borrow().snapshot().quotes.get(&id).cloned() else {
+        let snap = self.quotes.borrow().snapshot();
+        let fresh = snap.fresh_symbols.contains(&id);
+        let Some(q) = snap.quotes.get(&id) else {
             return;
         };
         let depth = self.depth.borrow();
         let Some(d) = depth.as_ref() else { return };
         d.set_heading(format!("{}  {}", q.name, id).into());
         d.set_price(format!("{}　{}", format_price(q.price), signed(q.change_percent)).into());
-        d.set_ink(ink(q.change_percent, true));
+        d.set_ink(ink(q.change_percent, fresh));
         d.set_pinned(self.pinned.get());
         d.set_amount(self.amount.get());
         d.set_daily(self.daily.get());
+        d.set_has_depth(
+            q.asks
+                .iter()
+                .chain(q.bids.iter())
+                .any(|level| level.price > Decimal::ZERO),
+        );
         let mut levels = vec![];
         for (is_ask, index) in (0..5)
             .rev()
@@ -806,7 +1018,8 @@ impl App {
                 q.asks.get(index)
             } else {
                 q.bids.get(index)
-            };
+            }
+            .filter(|p| p.price > Decimal::ZERO);
             levels.push(LadderRow {
                 label: format!("{}{}", if is_ask { "卖" } else { "买" }, index + 1).into(),
                 price: point
@@ -824,12 +1037,21 @@ impl App {
                     .unwrap_or_else(|| "—".into())
                     .into(),
                 ink: point
-                    .map(|p| ink(p.price - q.previous_close, true))
+                    .map(|p| ink(p.price - q.previous_close, fresh))
                     .unwrap_or_else(|| ink(Decimal::ZERO, false)),
             });
         }
-        d.set_ladder(ModelRc::new(VecModel::from(levels)));
+        if !d.get_ladder().iter().eq(levels.iter().cloned()) {
+            d.set_ladder(ModelRc::new(VecModel::from(levels)));
+        }
         let chart = self.details.borrow().snapshot(self.start.elapsed(), None);
+        d.set_has_chart(chart.data.as_ref().is_some_and(|data| {
+            if self.daily.get() {
+                !data.daily.is_empty()
+            } else {
+                !data.minutes.is_empty()
+            }
+        }));
         if let Some(data) = &chart.data {
             if !self
                 .chart_data
@@ -837,7 +1059,24 @@ impl App {
                 .as_ref()
                 .is_some_and(|old| Arc::ptr_eq(old, data))
             {
-                d.set_chart(chart::render(data, self.daily.get(), q.previous_close));
+                let (image, axis) =
+                    chart::render(data, self.daily.get(), q.previous_close, q.price);
+                d.set_chart(image);
+                d.set_axis(ModelRc::new(VecModel::from(axis)));
+                d.set_first_date(
+                    data.daily
+                        .first()
+                        .map(|b| b.date.as_str())
+                        .unwrap_or("")
+                        .into(),
+                );
+                d.set_last_date(
+                    data.daily
+                        .last()
+                        .map(|b| b.date.as_str())
+                        .unwrap_or("")
+                        .into(),
+                );
                 self.chart_data.replace(Some(data.clone()));
             }
         } else {
@@ -853,23 +1092,33 @@ impl App {
         let mut rows = Vec::new();
         if !ticks.is_empty() {
             d.set_trades_title(format!("分笔成交 · {}s", s.trade_refresh_seconds).into());
-            for t in ticks.iter().take(8) {
+            let mut ticks = ticks.iter().collect::<Vec<_>>();
+            ticks.sort_by(|a, b| b.time.cmp(&a.time));
+            for t in ticks.into_iter().take(8) {
                 rows.push(TradeRow {
                     time: t.time.as_str().into(),
                     price: format_price(t.price).into(),
                     size: format_volume_lots(t.volume_lots).into(),
-                    ink: ink(t.price - q.previous_close, true),
+                    ink: ink(
+                        t.price - q.previous_close,
+                        fresh
+                            && !recent.stale
+                            && !recent.data.as_ref().is_some_and(|v| v.trades_stale),
+                    ),
                 });
             }
         } else {
-            d.set_trades_title("分钟成交 · 非逐笔".into());
-            if let Some(data) = &chart.data {
-                for m in data.minutes.iter().rev().take(8) {
+            d.set_trades_title("成交暂无数据".into());
+            if let Some(data) = chart.data.as_ref().filter(|d| !d.minutes.is_empty()) {
+                d.set_trades_title("分钟成交 · 非逐笔".into());
+                let mut minutes = data.minutes.iter().collect::<Vec<_>>();
+                minutes.sort_by(|a, b| b.time.cmp(&a.time));
+                for m in minutes.into_iter().take(8) {
                     rows.push(TradeRow {
                         time: m.time.as_str().into(),
                         price: format_price(m.price).into(),
                         size: format_volume_lots(m.volume_lots).into(),
-                        ink: ink(m.price - q.previous_close, true),
+                        ink: ink(m.price - q.previous_close, fresh && !chart.stale),
                     });
                 }
             }
@@ -882,7 +1131,9 @@ impl App {
                 ink: ink(Decimal::ZERO, false),
             });
         }
-        d.set_trades(ModelRc::new(VecModel::from(rows)));
+        if !d.get_trades().iter().eq(rows.iter().cloned()) {
+            d.set_trades(ModelRc::new(VecModel::from(rows)));
+        }
         let source = if s.source == MarketSource::Tencent {
             "腾讯行情"
         } else {
@@ -892,7 +1143,8 @@ impl App {
             .error
             .or(recent.error)
             .map_or_else(String::new, |e| format!(" · {e}"));
-        d.set_status(format!("{source} · {}{error}", q.timestamp).into());
+        let stale = if fresh { "" } else { " · 上次数据" };
+        d.set_status(format!("{source} · {}{stale}{error}", q.timestamp).into());
     }
 }
 #[cfg(windows)]

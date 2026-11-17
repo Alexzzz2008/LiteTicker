@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 pub enum DesktopCommand {
     ToggleVisibility,
     ShowSettings,
+    ShowUpdates,
+    PositionDetails,
     AddSymbols,
     Refresh,
     ShowDetails,

@@ -22,6 +22,15 @@ impl SettingsStore {
     pub fn file_path(&self) -> PathBuf {
         self.directory_path.join("settings.json")
     }
+    /// The first preview starts with the current user's v1 settings. Only the preview store is writable.
+    pub fn load_preview(&self, installed: &SettingsStore) -> Result<AppSettings> {
+        if self.file_path().try_exists()? || !installed.file_path().try_exists()? {
+            return self.load();
+        }
+        let settings = installed.load()?;
+        self.save(&settings)?;
+        Ok(settings)
+    }
     pub fn load(&self) -> Result<AppSettings> {
         let path = self.file_path();
         let file = match File::open(&path) {

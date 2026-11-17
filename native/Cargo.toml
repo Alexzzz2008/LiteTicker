@@ -16,10 +16,11 @@ path = "src/main.rs"
 required-features = ["gui"]
 
 [features]
-default = ["renderer-femtovg-wgpu"]
+default = ["renderer-software"]
 gui = ["dep:slint", "dep:slint-build", "dep:tiny-skia"]
 renderer-femtovg-wgpu = ["gui", "slint/renderer-femtovg-wgpu"]
 renderer-skia = ["gui", "slint/renderer-skia"]
+renderer-software = ["gui", "slint/renderer-software", "slint/software-renderer-path"]
 
 [dependencies]
 anyhow = "1"

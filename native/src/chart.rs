@@ -44,7 +44,12 @@ fn minute_index(time: &str) -> Option<u16> {
         _ => None,
     }
 }
-pub fn render(data: &MarketDetails, daily: bool, reference: Decimal) -> Image {
+pub fn render(
+    data: &MarketDetails,
+    daily: bool,
+    reference: Decimal,
+    price: Decimal,
+) -> (Image, Vec<slint::SharedString>) {
     let mut pix = Pixmap::new(900, 220).unwrap();
     pix.fill(Color::from_rgba8(25, 24, 29, 255));
     let coords: Vec<_> = if daily {
@@ -61,20 +66,47 @@ pub fn render(data: &MarketDetails, daily: bool, reference: Decimal) -> Image {
             .filter(|v| *v > Decimal::ZERO)
             .collect()
     };
-    let lo = coords.iter().min().and_then(|v| v.to_f64()).unwrap_or(0.);
-    let hi = coords.iter().max().and_then(|v| v.to_f64()).unwrap_or(1.);
+    let mut lo = coords.iter().min().and_then(|v| v.to_f64()).unwrap_or(0.);
+    let mut hi = coords.iter().max().and_then(|v| v.to_f64()).unwrap_or(1.);
+    if !daily && reference > Decimal::ZERO {
+        let mid = reference.to_f64().unwrap_or_default();
+        let span = (hi - mid).abs().max((lo - mid).abs());
+        hi = mid + span;
+        lo = mid - span;
+    }
+    let padding = ((hi - lo) * 0.08).max(0.005).max(hi.abs() * 0.001);
+    hi += padding;
+    lo -= padding;
+    let precision = if [reference, price]
+        .into_iter()
+        .chain(coords.iter().copied())
+        .any(|n| n.round_dp(2) != n)
+    {
+        3
+    } else {
+        2
+    };
+    let labels = (0..5)
+        .map(|i| format!("{:.*}", precision, hi - (hi - lo) * f64::from(i) / 4.).into())
+        .collect();
     let y = |v: Decimal| {
         if hi > lo {
-            (210.0 - 200.0 * (v.to_f64().unwrap_or(lo) - lo) / (hi - lo)) as f32
+            (218.0 - 216.0 * (v.to_f64().unwrap_or(lo) - lo) / (hi - lo)) as f32
         } else {
             110.
         }
     };
     for i in 0..=4 {
         let x = 2. + i as f32 * 224.;
-        stroke(&mut pix, [(x, 2.), (x, 218.)], [56, 54, 62], 1.);
+        if !daily {
+            stroke(&mut pix, [(x, 2.), (x, 218.)], [56, 54, 62], 1.);
+        }
         let y = 2. + i as f32 * 54.;
         stroke(&mut pix, [(2., y), (898., y)], [56, 54, 62], 1.);
+    }
+    if !daily && reference > Decimal::ZERO {
+        let line = y(reference);
+        stroke(&mut pix, [(2., line), (898., line)], [113, 103, 88], 1.);
     }
     if daily {
         let step = 896. / data.daily.len().max(1) as f32;
@@ -119,5 +151,5 @@ pub fn render(data: &MarketDetails, daily: bool, reference: Decimal) -> Image {
     }
     let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(pix.width(), pix.height());
     buffer.make_mut_bytes().copy_from_slice(pix.data());
-    Image::from_rgba8_premultiplied(buffer)
+    (Image::from_rgba8_premultiplied(buffer), labels)
 }

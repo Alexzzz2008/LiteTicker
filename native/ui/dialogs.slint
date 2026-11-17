@@ -1,28 +1,146 @@
-import { Button, CheckBox, ComboBox, Slider, LineEdit, ListView, ScrollView } from "std-widgets.slint";
+import { ListView, ScrollView } from "std-widgets.slint";
 
-component Caption inherits Text {color: #efeeec; vertical-alignment: center; font-size: 20px;}
-component Heading inherits Caption {font-weight: 700; font-size: 23px; height: 42px;}
-component Rule inherits Rectangle {height: 1px; background: #43464e;}
-
-component TitleBar inherits HorizontalLayout {
+component DialogButton inherits Rectangle {
+    in property <string> text;
+    in property <float> scale: 1;
+    in property <length> text-size: 20px * scale;
+    in property <bool> primary: false;
+    in property <bool> quiet: false;
+    in property <bool> selected: false;
+    in property <bool> enabled: true;
+    in property <bool> tab-stop: true;
+    callback clicked();
+    min-width: (quiet ? 42px : 88px) * scale; min-height: 40px * scale;
+    border-radius: 4px * scale;
+    border-width: quiet && !keys.has-focus ? 0px : 1px;
+    border-color: keys.has-focus ? #de4552 : #454a53;
+    background: !enabled ? #252930 : selected ? #4a222a : primary ? (area.pressed ? #a92e3b : area.has-hover ? #ec5562 : #de4552) : area.has-hover || area.pressed ? #252930 : #13161b;
+    accessible-role: button; accessible-label: text; accessible-enabled: enabled;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+    forward-focus: keys;
+    Text {text: root.text; color: root.enabled ? #efeeec : #a4a8b1; font-size: root.text-size; horizontal-alignment: center; vertical-alignment: center; overflow: elide;}
+    keys := FocusScope {
+        enabled: root.enabled; focus-on-tab-navigation: root.tab-stop;
+        key-pressed(e) => {if e.text == " " || e.text == Key.Return {root.clicked(); return accept;} return reject;}
+    }
+    area := TouchArea {enabled: root.enabled; clicked => {keys.focus(); root.clicked();}}
+}
+component Caption inherits Text {
+    in property <float> scale: 1;
+    color: #efeeec; vertical-alignment: center; font-size: 20px * scale;
+    overflow: elide;
+}
+component Heading inherits Caption {font-weight: 700; font-size: 22px * root.scale; height: 40px * root.scale;}
+component Rule inherits Rectangle {height: 1px; background: #454a53;}
+component Choice inherits Rectangle {
+    in property <float> scale: 1;
+    in property <[string]> model;
+    private property <bool> expanded: false;
+    in-out property <int> current-index: 0;
+    min-height: 38px * scale; min-width: 150px * scale;
+    border-radius: 4px * scale; border-width: 1px; border-color: keys.has-focus ? #de4552 : #454a53; background: #252930;
+    accessible-role: combobox; accessible-value: current-index >= 0 ? model[current-index] : "";
+    accessible-expandable: true; accessible-expanded: expanded; accessible-action-expand => {popup.show();}
+    forward-focus: keys;
+    Caption {scale: root.scale; x: 14px * root.scale; width: parent.width - 45px * root.scale; text: root.current-index >= 0 ? root.model[root.current-index] : "";}
+    Path {x: parent.width - 28px * root.scale; y: (parent.height - 10px * root.scale) / 2; width: 16px * root.scale; height: 10px * root.scale;
+        viewbox-width:16;viewbox-height:10;commands:"M1 1 L8 8 L15 1";fill:transparent;stroke:#efeeec;stroke-width:2px * root.scale;
+    }
+    keys := FocusScope {
+        key-pressed(e) => {
+            if e.text == Key.DownArrow && !e.modifiers.alt {root.current-index = min(root.model.length - 1, root.current-index + 1);return accept;}
+            if e.text == Key.UpArrow {root.current-index = max(0, root.current-index - 1);return accept;}
+            if e.text == Key.Return || e.text == " " || e.text == Key.F4 || (e.text == Key.DownArrow && e.modifiers.alt) {popup.show(); return accept;}
+            return reject;
+        }
+    }
+    TouchArea {clicked => {keys.focus(); popup.show();}}
+    popup := PopupWindow {
+        x: 0px; y: root.height; width: root.width;
+        height: min(8, root.model.length) * 38px * root.scale + 2px;
+        close-policy: close-on-click-outside; forward-focus: popupkeys;
+        Rectangle {background: #252930; border-width: 1px; border-color: #454a53;}
+        popupkeys := FocusScope {
+            focus-changed-event => {root.expanded = self.has-focus;}
+            key-pressed(e) => {
+                if e.text == Key.DownArrow {root.current-index = min(root.model.length - 1, root.current-index + 1);return accept;}
+                if e.text == Key.UpArrow {root.current-index = max(0, root.current-index - 1);return accept;}
+                if e.text == Key.Return || e.text == Key.Escape {popup.close();keys.focus();return accept;}
+                return reject;
+            }
+            ScrollView {
+                VerticalLayout {padding: 1px; spacing: 0px;
+                    for label[i] in root.model: Rectangle {
+                        height: 38px * root.scale;
+                        background: root.current-index == i ? #4a222a : area.has-hover ? #13161b : #252930;
+                        Caption {scale: root.scale; x: 12px * root.scale; width: parent.width - 24px * root.scale; text: label;}
+                        area := TouchArea {clicked => {root.current-index = i; popup.close();keys.focus();}}
+                    }
+                }
+            }
+        }
+    }
+}
+component Toggle inherits Rectangle {
+    in property <float> scale: 1;
+    in-out property <bool> checked;
+    min-height: 42px * scale; min-width: 56px * scale;
+    accessible-role: checkbox; accessible-checkable: true; accessible-checked <=> checked;
+    accessible-action-default => {root.checked = !root.checked;}
+    border-width: keys.has-focus ? 1px : 0px; border-color: #de4552;
+    forward-focus: keys;
+    Rectangle {x: parent.width - self.width; y: (parent.height - self.height) / 2; width: 50px * root.scale; height: 29px * root.scale; border-radius: self.height / 2; background: root.checked ? #de4552 : #454a53;
+        Rectangle {x: root.checked ? parent.width - self.width - 3px * root.scale : 3px * root.scale; y: 3px * root.scale; width: 23px * root.scale; height: self.width; border-radius: self.height / 2; background: #efeeec;}
+    }
+    keys := FocusScope {key-pressed(e) => {if e.text == " " {root.checked = !root.checked;return accept;} return reject;}}
+    TouchArea {clicked => {keys.focus();root.checked = !root.checked;}}
+}
+component OpacitySlider inherits Rectangle {
+    in property <float> scale: 1;
+    in-out property <float> value: 100;
+    min-height: 42px * scale;
+    accessible-role: slider; accessible-label: "窗口透明度"; accessible-value: value;
+    accessible-value-minimum: 60; accessible-value-maximum: 100; accessible-value-step: 1;
+    accessible-action-set-value(v) => {if v.is-float() {root.value = clamp(v.to-float(),60,100);}}
+    accessible-action-increment => {root.value = min(100,root.value + 1);}
+    accessible-action-decrement => {root.value = max(60,root.value - 1);}
+    border-width: keys.has-focus ? 1px : 0px; border-color: #de4552;
+    forward-focus: keys;
+    Rectangle {x: 8px * root.scale; y: parent.height / 2 - 3px * root.scale; width: parent.width - 24px * root.scale; height: 6px * root.scale; border-radius: self.height / 2; background: #454a53;
+        Rectangle {width: (root.value - 60) / 40 * parent.width; height: parent.height; border-radius: self.height / 2; background: #de4552;}
+        Rectangle {x: (root.value - 60) / 40 * parent.width - self.width / 2; y: -6px * root.scale; width: 18px * root.scale; height: self.width; border-radius: self.width / 2; background: #efeeec;}
+    }
+    keys := FocusScope {key-pressed(e) => {
+        if e.text == Key.LeftArrow || e.text == Key.DownArrow {root.value = max(60, root.value - 1);return accept;}
+        if e.text == Key.RightArrow || e.text == Key.UpArrow {root.value = min(100, root.value + 1);return accept;}
+        if e.text == Key.Home {root.value = 60;return accept;} if e.text == Key.End {root.value = 100;return accept;}
+        return reject;
+    }}
+    area := TouchArea {
+        pointer-event(e) => {if e.kind == PointerEventKind.down && e.button == PointerEventButton.left {keys.focus();root.value = round(clamp(60 + 40 * (self.mouse-x - 8px * root.scale) / max(1px, self.width - 24px * root.scale), 60, 100));}}
+        moved => {if self.pressed {root.value = round(clamp(60 + 40 * (self.mouse-x - 8px * root.scale) / max(1px, self.width - 24px * root.scale), 60, 100));}}
+    }
+}
+component TitleBar inherits Rectangle {
+    in property <float> scale: 1;
     in property <string> heading;
     in property <string> subtitle;
-    callback close();
-    callback drag();
-    height: 76px; spacing: 16px;
-    Image {width: 56px; source: @image-url("logo.png"); image-fit: contain;}
-    Rectangle {
-        VerticalLayout {
-            Text {text: root.heading; color: #efeeec; font-size: 30px; font-weight: 700;}
-            Text {text: root.subtitle; color: #a4a8b1; font-size: 16px; overflow: elide;}
+    callback close(); callback drag();
+    height: 88px * scale;
+    TouchArea {pointer-event(e) => {if e.kind == PointerEventKind.down && e.button == PointerEventButton.left {root.drag();}}}
+    HorizontalLayout {spacing: 16px * root.scale;
+        Image {width: 56px * root.scale; height: 56px * root.scale; source: @image-url("logo.png"); image-fit: contain;}
+        VerticalLayout {spacing: 4px * root.scale;
+            Caption {scale: root.scale; text: root.heading; font-size: 30px * root.scale; font-weight: 700; height: 42px * root.scale;}
+            Caption {scale: root.scale; text: root.subtitle; color: #a4a8b1; font-size: 15px * root.scale; vertical-alignment: top;}
         }
-        TouchArea {pointer-event(e) => {if e.kind == PointerEventKind.down && e.button == PointerEventButton.left {root.drag();}}}
+        DialogButton {scale: root.scale; width: 42px * root.scale; height: 42px * root.scale; text-size: 30px * root.scale; text: "×";quiet: true;tab-stop: false;clicked => {root.close();}}
     }
-    Button {width: 45px; text: "×"; clicked => {root.close();}}
 }
 export component SettingsWindow inherits Window {
-    no-frame: true; title: "轻盘设置"; default-font-family: "Microsoft YaHei UI"; background: #13161b;
-    preferred-width: 836px; preferred-height: 915px; min-width: 585px; min-height: 510px;
+    no-frame: true; title: "轻盘 · 设置"; default-font-family: "Microsoft YaHei UI"; background: #13161b;
+    in property <float> scale: 1.1;
+    preferred-width: 760px * scale; preferred-height: 832px * scale; min-width: 570px * scale; min-height: 440px * scale;
     in property <string> version;
     in-out property <int> tab;
     in-out property <int> source;
@@ -34,103 +152,168 @@ export component SettingsWindow inherits Window {
     in-out property <int> global-index;
     in-out property <int> quote-index;
     in-out property <int> depth-index;
+    in property <[string]> global-options;
+    in property <[string]> quote-options;
+    in property <[string]> depth-options;
     in-out property <int> recording: -1;
     in property <string> toggle-label;
     in property <string> refresh-label;
     in property <string> message;
+    in property <bool> update-busy: message == "正在检查更新…";
+    in property <bool> download-enabled: false;
+    in property <string> latest-version: "尚未检查";
     callback key(int,string,bool,bool,bool);
     callback action(string);
     keyboard := FocusScope {
-        key-pressed(e) => {
-            if root.recording >= 0 {root.key(root.recording,e.text,e.modifiers.control,e.modifiers.alt,e.modifiers.shift); return accept;}
-            if e.text == Key.Escape {root.action("close"); return accept;}
+        focus-on-tab-navigation: false;
+        capture-key-pressed(e) => {
+            if e.text == Key.Escape {if root.recording >= 0 {root.recording = -1;} else {root.action("close");} return accept;}
+            if root.recording >= 0 {
+                if e.text == Key.Tab || e.text == Key.Backtab {root.recording = -1;return reject;}
+                if e.text != Key.Control && e.text != Key.Shift && e.text != Key.Alt && e.text != Key.ControlR && e.text != Key.ShiftR && e.text != Key.AltGr {root.key(root.recording,e.text,e.modifiers.control,e.modifiers.alt,e.modifiers.shift);}
+                return accept;
+            }
             return reject;
         }
-    }
-    VerticalLayout { padding: 24px; spacing: 9px;
-        TitleBar {heading: "轻盘设置"; subtitle: "桌面看盘助手  ·  v" + root.version; close => {root.action("close");} drag => {root.action("drag");}}
-        Rule {}
-        HorizontalLayout {height: 40px; spacing: 8px;
-            for page[i] in ["常规设置","字体大小","版本与更新"]: Button {text: page; primary: root.tab == i; clicked => {root.tab = i; root.recording = -1;}}
-            Rectangle {}
-        }
-        ScrollView {
-            VerticalLayout {spacing: 12px;
-                if root.tab == 0: VerticalLayout { spacing: 11px;
-                    Heading {text: "行情数据";}
-                    HorizontalLayout { Caption {text: "行情数据源";} ComboBox {width: 55%; model: ["腾讯行情","东方财富"]; current-index <=> root.source; } }
-                    HorizontalLayout { Caption {text: "行情刷新间隔";} ComboBox {width: 55%; model: ["1 秒","2 秒","3 秒","5 秒","10 秒"]; current-index <=> root.interval;} }
-                    HorizontalLayout { Caption {text: "分笔刷新间隔";} ComboBox {width: 55%; model: ["2 秒","3 秒"]; current-index <=> root.trade;} }
-                    Rule {} Heading {text: "窗口显示";}
-                    HorizontalLayout {Caption {text: "窗口透明度";} Slider {minimum:60; maximum:100; value <=> root.opacity-pct;} Caption {width:70px; text: round(root.opacity-pct) + "%";}}
-                    CheckBox {text: "始终置顶"; checked <=> root.topmost;}
-                    Rule {} Heading {text: "全局快捷键";}
-                    HorizontalLayout {Caption {text:"显示 / 隐藏窗口";} Button {text:root.recording == 0 ? "请按快捷键" : root.toggle-label; clicked => {root.recording = 0; keyboard.focus();}}}
-                    HorizontalLayout {Caption {text:"刷新行情";} Button {text:root.recording == 1 ? "请按快捷键" : root.refresh-label; clicked => {root.recording = 1; keyboard.focus();}}}
-                    Text {text:"点击后重新录入，支持 Ctrl+Q、Alt+R 等两键组合。";color:#a4a8b1;}
+        key-pressed(e) => {if e.text == Key.Return {if !root.update-busy {root.action("save");} return accept;} return reject;}
+        VerticalLayout {padding-left: 30px * root.scale; padding-right: 30px * root.scale; padding-top: 24px * root.scale; padding-bottom: 24px * root.scale; spacing: 7px * root.scale;
+            TitleBar {scale: root.scale; heading: "轻盘设置"; subtitle: "桌面看盘助手  ·  v" + root.version; close => {root.action("close");} drag => {root.action("drag");}}
+            Rule {}
+            HorizontalLayout {height: 42px * root.scale; spacing: 10px * root.scale;
+                for page[i] in ["常规设置","字体大小","版本与更新"]: DialogButton {scale: root.scale; text: page; quiet: true;selected: root.tab == i;clicked => {root.tab = i;root.recording = -1;}}
+                Rectangle {}
+            }
+            ScrollView {
+                VerticalLayout {spacing: 10px * root.scale;
+                    if root.tab == 0: VerticalLayout {spacing: 8px * root.scale;
+                        Heading {scale: root.scale;text: "行情数据";}
+                        HorizontalLayout {height: 48px * root.scale; Caption {scale: root.scale;text: "行情数据源";} Choice {scale: root.scale;width: 62%;accessible-label: "行情数据源";model: ["腾讯行情","东方财富"];current-index <=> root.source;}}
+                        HorizontalLayout {height: 48px * root.scale; Caption {scale: root.scale;text: "行情刷新间隔";} Choice {scale: root.scale;width: 62%;accessible-label: "行情刷新间隔";model: ["1 秒","2 秒","3 秒","5 秒","10 秒"];current-index <=> root.interval;}}
+                        HorizontalLayout {height: 48px * root.scale; Caption {scale: root.scale;text: "分笔刷新间隔  ⓘ";} Choice {scale: root.scale;width: 62%;accessible-label: "分笔刷新间隔";model: ["2 秒","3 秒"];current-index <=> root.trade;}}
+                        Rule {} Heading {scale: root.scale;text: "窗口显示";}
+                        HorizontalLayout {height: 48px * root.scale; Caption {scale: root.scale;text: "窗口透明度";} OpacitySlider {scale: root.scale;width: 50%;value <=> root.opacity-pct;} Caption {scale: root.scale;width: 70px * root.scale;text: round(root.opacity-pct) + "%";}}
+                        HorizontalLayout {height: 48px * root.scale; Caption {scale: root.scale;text: "始终置顶";} Toggle {scale: root.scale;width: 62%;checked <=> root.topmost;accessible-label: "窗口始终置顶";}}
+                        Rule {} Heading {scale: root.scale;text: "全局快捷键";}
+                        HorizontalLayout {height: 50px * root.scale; Caption {scale: root.scale;text:"显示 / 隐藏窗口";} DialogButton {scale: root.scale;width: 52%;text:root.recording == 0 ? "请按快捷键" : root.toggle-label;selected:root.recording == 0;clicked => {root.recording = 0;}}}
+                        HorizontalLayout {height: 50px * root.scale; Caption {scale: root.scale;text:"刷新行情";} DialogButton {scale: root.scale;width: 52%;text:root.recording == 1 ? "请按快捷键" : root.refresh-label;selected:root.recording == 1;clicked => {root.recording = 1;}}}
+                        Text {text:"点击后重新录入，支持 Ctrl+Q、Alt+R 等两键组合。Delete / Backspace 禁用。";color:#a4a8b1;font-size:15px * root.scale;wrap:word-wrap;}
+                    }
+                    if root.tab == 1: VerticalLayout {spacing: 12px * root.scale;
+                        Heading {scale:root.scale;text:"字体大小";}
+                        HorizontalLayout {height:50px * root.scale;Caption {scale:root.scale;text:"全局字号";} Choice {scale:root.scale;width:62%;accessible-label:"全局字号百分比";model:root.global-options;current-index <=> root.global-index;}}
+                        HorizontalLayout {height:50px * root.scale;Caption {scale:root.scale;text:"行情列表字号";} Choice {scale:root.scale;width:62%;accessible-label:"行情列表字号百分比";model:root.quote-options;current-index <=> root.quote-index;}}
+                        HorizontalLayout {height:50px * root.scale;Caption {scale:root.scale;text:"盘口字号";} Choice {scale:root.scale;width:62%;accessible-label:"盘口字号百分比";model:root.depth-options;current-index <=> root.depth-index;}}
+                        Text {text:"保存后应用字号。行情列表和盘口可分别设置，或跟随全局。";color:#a4a8b1;font-size:15px * root.scale;wrap:word-wrap;}
+                    }
+                    if root.tab == 2: VerticalLayout {spacing: 12px * root.scale;
+                        Heading {scale:root.scale;text:"版本更新";}
+                        Caption {scale:root.scale;text:"当前版本　 v" + root.version;}
+                        Caption {scale:root.scale;text:"可用更新　 " + root.latest-version;}
+                        HorizontalLayout {height:48px * root.scale;Caption {scale:root.scale;text:"启动时自动检查更新";} Toggle {scale:root.scale;width:62%;checked <=> root.automatic;accessible-label:"启动时自动检查更新";}}
+                        Text {text:"发现新版后会提醒。下载安装后重启生效，保留自选股与设置。";color:#a4a8b1;font-size:15px * root.scale;wrap:word-wrap;}
+                        HorizontalLayout {height:44px * root.scale;spacing:12px * root.scale;
+                            DialogButton {scale:root.scale;text:"检查更新";enabled:!root.update-busy;clicked=>{root.action("check");}}
+                            DialogButton {scale:root.scale;text:"下载并重启";primary:true;enabled:root.download-enabled && !root.update-busy;clicked=>{root.action("download");}}
+                            Rectangle {}
+                        }
+                    }
+                    Rectangle {vertical-stretch:1;}
                 }
-                if root.tab == 1: VerticalLayout {spacing: 12px;
-                    Heading {text:"字体大小";}
-                    HorizontalLayout {Caption {text:"全局字号";} ComboBox {model:["80%","90%","100%","110%","120%"]; current-index <=> root.global-index;}}
-                    HorizontalLayout {Caption {text:"行情列表字号";} ComboBox {model:["跟随全局","80%","90%","100%","110%","120%","130%","140%","150%"];current-index <=> root.quote-index;}}
-                    HorizontalLayout {Caption {text:"盘口字号";} ComboBox {model:["跟随全局","80%","90%","100%","110%","120%"];current-index <=> root.depth-index;}}
-                }
-                if root.tab == 2: VerticalLayout {spacing: 12px;
-                    Heading {text:"版本更新";}
-                    Caption {text:"当前版本　 v" + root.version;}
-                    CheckBox {text:"启动时自动检查更新";checked <=> root.automatic;}
-                    Button {text:"检查更新";clicked => {root.action("check");}}
-                }
-                Text {text: root.message; color:#eca7ae; wrap:word-wrap;}
-                Rectangle {vertical-stretch:1;}
+            }
+            Rule {}
+            HorizontalLayout {height:56px * root.scale;spacing:12px * root.scale;
+                Text {text:root.message;color:#fa949b;font-size:15px * root.scale;wrap:word-wrap;vertical-alignment:center;}
+                DialogButton {scale:root.scale;width:116px * root.scale;text:"取消";clicked=>{root.action("close");}}
+                DialogButton {scale:root.scale;width:154px * root.scale;text:"保存设置";primary:true;enabled:!root.update-busy;clicked=>{root.action("save");}}
             }
         }
-        Rule {}
-        HorizontalLayout {height: 48px; spacing: 12px; Rectangle {} Button {text:"取消";clicked => {root.action("close");}} Button {primary:true; text:"保存设置";clicked => {root.action("save");}}}
     }
 }
 
-export struct SearchResult { name:string, code:string, market:string, chosen:bool }
+export struct SearchResult {name:string, code:string, market:string, chosen:bool, selected:bool}
 export component SearchWindow inherits Window {
-    no-frame:true; title:"添加自选"; background:#13161b; default-font-family: "Microsoft YaHei UI";
-    preferred-width:720px; preferred-height:660px; min-width:430px; min-height:310px;
+    no-frame:true; title:"轻盘 · 添加自选"; background:#13161b; default-font-family:"Microsoft YaHei UI";
+    in property <float> scale:1;
+    preferred-width:720px * scale; preferred-height:660px * scale; min-width:430px * scale; min-height:310px * scale;
     in-out property <string> query;
     in property <[SearchResult]> matches;
     in property <string> message;
+    in property <bool> failed:false;
+    in property <bool> busy:false;
+    in property <bool> query-ready:false;
     in property <int> count;
-    in-out property <int> current: -1;
-    callback edited();
-    callback toggle(int);
-    callback action(string);
-    forward-focus: input;
-    VerticalLayout {padding:24px; spacing:10px;
-        TitleBar {heading:"添加自选";subtitle:"输入编号或首字母，如 600519、gzmt；多个编号用空格分隔。";close => {root.action("close");} drag => {root.action("drag");}}
-        HorizontalLayout {height:44px; spacing:12px;
-            input := LineEdit { text <=> root.query; edited => {root.edited();} accepted => {root.action("search");} }
-            Button {text:"搜索"; clicked => {root.action("search");}}
-        }
-        Text {text:root.message; color:#a4a8b1; wrap:word-wrap;}
-        HorizontalLayout {height:34px; Caption {width:48%;text:"　股票名称";} Caption {width:30%;text:"编号";} Caption {text:"市场";}}
-        listkeys := FocusScope {
-            key-pressed(e) => {
-                if e.text == Key.DownArrow {root.current=min(root.matches.length - 1,root.current+1);return accept;}
-                if e.text == Key.UpArrow {root.current=max(0, root.current - 1);return accept;}
-                if e.text == " " {root.toggle(root.current);return accept;}
-                if e.text == Key.Return {root.action("add");return accept;}
-                if e.text == Key.Escape {root.action("close");return accept;}
-                return reject;
-            }
-            ListView {for row[i] in root.matches: Rectangle {
-                height: 36px; background: root.current == i ? #4a222a : area.has-hover ? #25282d : #13161b;
-                HorizontalLayout {
-                    Caption {width:48%;text:(row.chosen ? " ☑　" : " ☐　") + row.name;}
-                    Caption {width:30%;text:row.code;} Caption {text:row.market;}
+    in-out property <[int]> selected-rows;
+    in-out property <int> anchor:-1;
+    in-out property <int> current:-1;
+    callback edited(); callback toggle(int); callback select(int,bool,bool,bool); callback action(string);
+    forward-focus:input;
+    keys := FocusScope {
+        focus-on-tab-navigation:false;
+        capture-key-pressed(e)=>{if e.text == Key.Escape {root.action("close");return accept;} return reject;}
+        VerticalLayout {padding-left:28px * root.scale;padding-right:28px * root.scale;padding-top:24px * root.scale;padding-bottom:24px * root.scale;spacing:8px * root.scale;
+            TitleBar {scale:root.scale;heading:"添加自选";subtitle:"输入编号或首字母，如 600519、gzmt；多个编号用空格分隔。";close=>{root.action("close");}drag=>{root.action("drag");}}
+            HorizontalLayout {height:48px * root.scale;spacing:12px * root.scale;
+                Rectangle {background:#252930;border-radius:5px * root.scale;border-width:1px;border-color:input.has-focus ? #de4552 : #454a53;
+                    TouchArea {clicked=>{input.focus();}}
+                    viewport := Flickable {x:12px * root.scale;y:8px * root.scale;width:parent.width - 24px * root.scale;height:parent.height - 16px * root.scale;interactive:false;
+                        content-width:max(self.width,input.preferred-width + 2px);content-height:self.height;
+                        input := TextInput {accessible-label:"股票编号或首字母";text <=> root.query;single-line:true;font-size:20px * root.scale;color:#efeeec;selection-background-color:#4a222a;selection-foreground-color:#efeeec;
+                            width:max(viewport.width,self.preferred-width + 2px);height:viewport.height;vertical-alignment:center;
+                            cursor-position-changed(pos)=>{if pos.x + viewport.content-x > viewport.width - 2px {viewport.content-x = viewport.width - pos.x - 2px;} if pos.x + viewport.content-x < 0px {viewport.content-x = -pos.x;}}
+                            edited=>{root.edited();} accepted=>{root.action("search");}
+                            key-pressed(e)=>{if e.text == Key.DownArrow && root.matches.length > 0 {root.select(0,false,false,true);listkeys.focus();return accept;} return reject;}
+                        }
+                    }
                 }
-                area := TouchArea {clicked => {root.current=i;listkeys.focus();root.toggle(i);} double-clicked => {root.action("add");}}
-            }}
+                DialogButton {scale:root.scale;width:104px * root.scale;text:"搜索";enabled:!root.busy && root.query-ready;clicked=>{root.action("search");}}
+            }
+            Text {height:40px * root.scale;text:root.message;color:root.failed ? #fa949b : #a4a8b1;font-size:16px * root.scale;wrap:word-wrap;vertical-alignment:center;}
+            Rectangle {border-width:1px;border-color:#454a53;
+                VerticalLayout {padding:1px;spacing:0px;
+                    Rectangle {height:34px * root.scale;background:#252930;
+                        HorizontalLayout {spacing:0px;Caption {scale:root.scale;width:48%;text:"　股票名称";font-size:16px * root.scale;color:#a4a8b1;} Caption {scale:root.scale;width:29%;text:"编号";font-size:16px * root.scale;color:#a4a8b1;} Caption {scale:root.scale;text:"市场";font-size:16px * root.scale;color:#a4a8b1;}}
+                    }
+                    listkeys := FocusScope {
+                        key-pressed(e)=>{
+                            if root.matches.length > 0 {
+                                if e.text == Key.DownArrow {root.select(min(root.matches.length - 1,root.current + 1),e.modifiers.control,e.modifiers.shift,true);list.ensure-row-visible(root.current,ScrollBehavior.instant);return accept;}
+                                if e.text == Key.UpArrow {root.select(max(0,root.current - 1),e.modifiers.control,e.modifiers.shift,true);list.ensure-row-visible(root.current,ScrollBehavior.instant);return accept;}
+                                if e.text == Key.Home {root.select(0,e.modifiers.control,e.modifiers.shift,true);list.ensure-row-visible(root.current,ScrollBehavior.instant);return accept;}
+                                if e.text == Key.End {root.select(root.matches.length - 1,e.modifiers.control,e.modifiers.shift,true);list.ensure-row-visible(root.current,ScrollBehavior.instant);return accept;}
+                                if e.text == " " {root.action("toggle-selection");return accept;}
+                            }
+                            if e.text == Key.Return {root.action("add");return accept;} return reject;
+                        }
+                        list := ListView {for row[i] in root.matches: Rectangle {
+                            height:32px * root.scale;background:row.selected ? #4a222a : area.has-hover ? #252930 : #13161b;
+                            border-width:listkeys.has-focus && root.current == i ? 1px : 0px;border-color:#de4552;
+                            accessible-role:list-item;accessible-label:row.name + " " + row.code + " " + row.market;
+                            accessible-action-default=>{root.select(i,false,false,false);listkeys.focus();}
+                            HorizontalLayout {spacing:0px;
+                                Rectangle {width:48%;HorizontalLayout {spacing:7px * root.scale;
+                                    Rectangle {width:28px * root.scale;Rectangle {x:4px * root.scale;y:(parent.height - self.height) / 2;width:22px * root.scale;height:self.width;background:row.chosen ? #de4552 : #252930;border-width:1px;border-color:#454a53;
+                                        if row.chosen: Path {x:3px * root.scale;y:4px * root.scale;width:16px * root.scale;height:14px * root.scale;
+                                            viewbox-width:16;viewbox-height:14;commands:"M1 7 L6 12 L15 1";fill:transparent;stroke:#efeeec;stroke-width:2px * root.scale;
+                                        }
+                                    }}
+                                    Caption {scale:root.scale;text:row.name;}
+                                }}
+                                Caption {scale:root.scale;width:29%;text:row.code;} Caption {scale:root.scale;text:row.market;}
+                            }
+                            area := TouchArea {
+                                pointer-event(e)=>{if e.kind == PointerEventKind.down && e.button == PointerEventButton.left {root.select(i,e.modifiers.control,e.modifiers.shift,false);listkeys.focus();}}
+                                double-clicked=>{root.action("add");}
+                            }
+                            Rectangle {width:28px * root.scale;accessible-role:checkbox;accessible-label:row.name + " " + row.code;accessible-checkable:true;accessible-checked:row.chosen;accessible-action-default=>{root.toggle(i);}
+                                TouchArea {clicked=>{root.select(i,false,false,false);root.toggle(i);listkeys.focus();}double-clicked=>{root.action("add");}}
+                            }
+                        }}
+                    }
+                }
+            }
+            Caption {scale:root.scale;height:30px * root.scale;font-size:16px * root.scale;color:#a4a8b1;text:root.count > 0 ? "已选 " + root.count + " 只股票" : "勾选多只，或点击一行后添加。";}
+            Rule {}
+            HorizontalLayout {height:52px * root.scale;spacing:12px * root.scale;Rectangle {}DialogButton {scale:root.scale;width:112px * root.scale;text:"取消";clicked=>{root.action("close");}}DialogButton {scale:root.scale;width:144px * root.scale;text:"添加所选";primary:true;enabled:root.count > 0 && !root.busy;clicked=>{root.action("add");}}}
         }
-        Caption {text:"已选 " + root.count + " 只股票";}
-        Rule {}
-        HorizontalLayout {height:44px; spacing:12px; Rectangle {} Button {text:"取消";clicked=>{root.action("close");}} Button {text:"添加所选";primary:true; enabled:root.count>0; clicked=>{root.action("add");}}}
     }
 }

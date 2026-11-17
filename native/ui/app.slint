@@ -15,14 +15,21 @@ component Action inherits Rectangle {
     border-radius: 3px;
     background: accent ? #86202b : touch.has-hover ? #34373f : #24272d;
     Text { text: root.label; color: #efeeec; font-size: root.text-size; horizontal-alignment: center; vertical-alignment: center; }
-    touch := TouchArea { clicked => { root.activated(); } }
+    focus := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == " " { root.activated(); return accept; }
+            return reject;
+        }
+    }
+    forward-focus: focus;
+    touch := TouchArea { clicked => { focus.focus(); root.activated(); } }
     accessible-role: button;
     accessible-label: label;
     accessible-action-default => { root.activated(); }
 }
 
 export component MainWindow inherits Window {
-    title: "轻盘 · 桌面看盘助手（预览）";
+    title: "轻盘 · 桌面看盘助手 · Rust 预览";
     no-frame: true;
     background: #1d1c20;
     default-font-family: "Microsoft YaHei UI";
@@ -100,6 +107,11 @@ export component DetailsWindow inherits Window {
     in property <[LadderRow]> ladder;
     in property <[TradeRow]> trades;
     in property <image> chart;
+    in property <[string]> axis;
+    in property <string> first-date;
+    in property <string> last-date;
+    in property <bool> has-chart;
+    in property <bool> has-depth;
     in property <bool> pinned;
     in property <bool> daily;
     in property <bool> amount;
@@ -109,34 +121,49 @@ export component DetailsWindow inherits Window {
     min-width: 540px * scale; min-height: 470px * scale;
     touch := TouchArea { changed has-hover => { root.hover(self.has-hover); } }
     VerticalLayout {
-        padding: 18px; spacing: 4px;
+        padding: 18px * root.scale; spacing: 4px * root.scale;
         HorizontalLayout {
-            height: 46px * root.scale; spacing: 8px;
+            height: 46px * root.scale; spacing: 8px * root.scale;
             Text { text: root.heading; color: #dedce0; font-size: 30px * root.scale; font-weight: 700; vertical-alignment: center;
                 TouchArea { pointer-event(e) => { if e.kind == PointerEventKind.down && e.button == PointerEventButton.left {root.command("drag");} } }
             }
-            Action {width: 100px; label: root.pinned ? "已固定" : "固定"; activated => {root.command("pin");}}
-            Action {width: 86px; label: "关闭"; activated => {root.command("close");}}
+            Action {text-size: 19px * root.scale; width: 100px * root.scale; label: root.pinned ? "已固定" : "固定"; activated => {root.command("pin");}}
+            Action {text-size: 19px * root.scale; width: 86px * root.scale; label: "关闭"; activated => {root.command("close");}}
         }
         Text { height: 46px * root.scale; text: root.price; color: root.ink; font-size: 32px * root.scale; font-weight: 700; }
         HorizontalLayout {
-            height: 39px * root.scale; spacing: 8px;
-            Action {width: 98px; label: "分时"; accent: !root.daily; activated => {root.command("minute");}}
-            Action {width: 98px; label: "日 K"; accent: root.daily; activated => {root.command("daily");}}
+            height: 39px * root.scale; spacing: 8px * root.scale;
+            Action {text-size: 19px * root.scale; width: 98px * root.scale; label: "分时"; accent: !root.daily; activated => {root.command("minute");}}
+            Action {text-size: 19px * root.scale; width: 98px * root.scale; label: "日 K"; accent: root.daily; activated => {root.command("daily");}}
             Text {text: root.daily ? "日 K" : "白线 价格 · 金线 均价"; color: #a4a8b1; vertical-alignment: center;}
         }
-        Image {source: root.chart; image-fit: fill; vertical-stretch: 2; min-height: 60px;}
-        HorizontalLayout {
-            height: 28px * root.scale;
-            for label in ["09:30","10:30","11:30 / 13:00","14:00","15:00"]: Text {text: root.daily ? "" : label; horizontal-alignment: center; color: #a4a8b1;}
+        Rectangle {
+            vertical-stretch: 2; min-height: 60px * root.scale; background: #19181c;
+            if root.has-chart: HorizontalLayout {
+                VerticalLayout {width: 72px * root.scale;
+                    for tick in root.axis: Text {text: tick; color: #908e9c; font-size: 19px * root.scale; vertical-alignment: center;}
+                }
+                Image {source: root.chart; image-fit: fill; accessible-label: "分时与日K走势图";}
+            }
+            if !root.has-chart: Text {text: root.daily ? "日 K 暂无数据" : "分时暂无数据"; color:#9595a1; horizontal-alignment:center; vertical-alignment:center;}
         }
         HorizontalLayout {
-            vertical-stretch: 3; spacing: 20px;
+            height: 28px * root.scale;
+            Rectangle { width:72px * root.scale; }
+            Rectangle {
+                for label[i] in root.daily ? [root.first-date, root.last-date] : ["09:30","10:30","11:30 / 13:00","14:00","15:00"]: Text {
+                    text: label; color: #a4a8b1; width: self.preferred-width;
+                    x: max(0px, min(parent.width - self.width, parent.width * i / (root.daily ? 1 : 4) - self.width / 2));
+                }
+            }
+        }
+        HorizontalLayout {
+            vertical-stretch: 3; spacing: 20px * root.scale;
             VerticalLayout {
                 horizontal-stretch: 1;
                 HorizontalLayout { height: 36px * root.scale;
-                    Text {text: root.amount ? "五档盘口 · 金额" : "五档盘口 · 手"; color: #b4b3bc; vertical-alignment: center;}
-                    Action {width: 90px; label: root.amount ? "看手数" : "看金额"; activated => {root.command("unit");}}
+                    Text {text: !root.has-depth ? "五档暂无数据" : root.amount ? "五档 · 金额（元）" : "五档盘口 · 手"; color: #b4b3bc; vertical-alignment: center;}
+                    Action {text-size: 19px * root.scale; width: 90px * root.scale; visible: root.has-depth; label: root.amount ? "看手数" : "看金额"; activated => {root.command("unit");}}
                 }
                 for level in root.ladder: HorizontalLayout {
                     Text {text: level.label; color: #a4a8b1;}
@@ -154,7 +181,7 @@ export component DetailsWindow inherits Window {
                 }
             }
         }
-        Text {height: 26px; text: root.status; color: #a4a8b1; overflow: elide;}
+        Text {height: 26px * root.scale; text: root.status; color: #a4a8b1; overflow: elide;}
     }
     default-font-size: min(24px * scale, root.height / 33);
 }
