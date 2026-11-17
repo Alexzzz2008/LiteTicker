@@ -707,3 +707,17 @@ fn cleanup_refuses_a_replaced_directory_symlink() {
     assert!(path.is_symlink());
     fs::remove_file(path).unwrap();
 }
+
+#[test]
+#[cfg(windows)]
+fn handoff_uses_the_same_absolute_payload_path_after_windows_restarts_the_helper() {
+    let directory = OwnedDirectory::new().unwrap();
+    let parent_payload = directory.path.join("payload.exe");
+    let helper = directory.path.join("apply.exe");
+    std::fs::write(&helper, b"fixture").unwrap();
+    let observed = helper.canonicalize().unwrap();
+    assert_eq!(
+        parent_payload,
+        observed.parent().unwrap().join("payload.exe")
+    );
+}

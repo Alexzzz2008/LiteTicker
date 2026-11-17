@@ -283,7 +283,9 @@ struct OwnedDirectory {
 impl OwnedDirectory {
     #[cfg(windows)]
     fn new() -> Result<Self> {
-        Self::new_in(&std::env::temp_dir())
+        // The helper gets its own canonical Win32 path after restarting. Record the
+        // same path representation when the parent creates its handoff directory.
+        Self::new_in(&std::env::temp_dir().canonicalize()?)
     }
     fn new_in(root: &Path) -> Result<Self> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
