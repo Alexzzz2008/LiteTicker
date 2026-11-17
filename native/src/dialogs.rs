@@ -267,6 +267,7 @@ fn prepare_dialog(
 #[cfg(windows)]
 mod modality {
     use super::*;
+    use anyhow::Context;
     use windows_sys::Win32::{
         Foundation::*,
         UI::{
@@ -281,6 +282,38 @@ mod modality {
         dialog: Cell<HWND>,
         was_enabled: bool,
         alive: Cell<bool>,
+    }
+    impl State {
+        fn present(&self) -> Result<()> {
+            let dialog = self.dialog.get();
+            if dialog.is_null() {
+                return Ok(());
+            }
+            unsafe {
+                if IsIconic(dialog) != 0 {
+                    ShowWindow(dialog, SW_RESTORE);
+                }
+                // Activating an ordinary tool window does not lift it above a topmost ticker.
+                let topmost =
+                    GetWindowLongPtrW(self.owner, GWL_EXSTYLE) & WS_EX_TOPMOST as isize != 0;
+                let after = if topmost { HWND_TOPMOST } else { HWND_TOP };
+                if SetWindowPos(
+                    dialog,
+                    after,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW,
+                ) == 0
+                {
+                    return Err(std::io::Error::last_os_error())
+                        .context("无法将弹窗置于行情列表前面");
+                }
+                SetForegroundWindow(dialog);
+            }
+            Ok(())
+        }
     }
     pub(super) struct Guard(Box<State>);
     impl Guard {
@@ -321,9 +354,8 @@ mod modality {
                     GWL_EXSTYLE,
                     (style | WS_EX_TOOLWINDOW as isize) & !(WS_EX_APPWINDOW as isize),
                 );
-                SetForegroundWindow(dialog);
             }
-            Ok(())
+            self.0.present()
         }
     }
     impl Drop for Guard {
@@ -350,9 +382,7 @@ mod modality {
         unsafe {
             let state = &*(data as *const State);
             if matches!(message, WM_HOTKEY | WM_CLOSE | 0x8001 | 0x8002 | 0x8003) {
-                if !state.dialog.get().is_null() {
-                    SetForegroundWindow(state.dialog.get());
-                }
+                let _ = state.present();
                 return 0;
             }
             if message == WM_NCDESTROY {

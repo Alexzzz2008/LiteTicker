@@ -131,6 +131,36 @@ fn click_name(app: &App, row: usize) {
     window.dispatch_event(WindowEvent::PointerReleased { position, button });
 }
 
+#[cfg(windows)]
+fn check_dialog_order(app: &App, window: &slint::Window, topmost: bool) -> Result<()> {
+    use windows_sys::Win32::UI::{
+        Input::KeyboardAndMouse::IsWindowEnabled, WindowsAndMessaging::*,
+    };
+    let owner = hwnd(app.window.window()).context("缺少行情窗口")?;
+    let dialog = hwnd(window).context("缺少弹窗")?;
+    unsafe {
+        ensure!(
+            GetWindow(dialog, GW_OWNER) == owner
+                && IsWindowEnabled(owner) == 0
+                && IsWindowEnabled(dialog) != 0
+                && IsWindowVisible(dialog) != 0,
+            "弹窗模态状态错误"
+        );
+        for h in [owner, dialog] {
+            ensure!(
+                (GetWindowLongPtrW(h, GWL_EXSTYLE) & WS_EX_TOPMOST as isize != 0) == topmost,
+                "弹窗与行情窗口没有处于预期的置顶层"
+            );
+        }
+        let mut next = GetWindow(dialog, GW_HWNDNEXT);
+        while !next.is_null() && next != owner {
+            next = GetWindow(next, GW_HWNDNEXT);
+        }
+        ensure!(next == owner, "行情列表挡住了弹窗");
+    }
+    Ok(())
+}
+
 pub fn start(app: Rc<App>, out: PathBuf) -> Result<Timer> {
     std::fs::create_dir(&out).context("验收输出必须是新目录")?;
     let mut phase = -5_i32;
@@ -209,12 +239,21 @@ pub fn start(app: Rc<App>, out: PathBuf) -> Result<Timer> {
                         ensure!(d.get_amount() && d.get_daily(), "盘口未切换为金额与日 K");
                         capture(d.window(), &out.join("daily.png"))?;
                         d.invoke_command("close".into());
+                        #[cfg(windows)]
+                        {
+                            let mut settings = app.settings.borrow().clone();
+                            settings.always_on_top = true;
+                            app.save(settings)?;
+                        }
                         app.command("settings");
                     }
                 }
                 3 => {
                     let w = app.settings_view.borrow().as_ref().context("设置没有打开")?.clone_strong();
+                    #[cfg(windows)]
+                    check_dialog_order(&app, w.window(), true)?;
                     capture(w.window(), &out.join("settings.png"))?;
+                    w.set_topmost(false);
                     w.set_tab(1);
                     w.set_quote_index(4);
                     w.invoke_action("save".into());
@@ -223,6 +262,8 @@ pub fn start(app: Rc<App>, out: PathBuf) -> Result<Timer> {
                 }
                 4 => {
                     let w = app.search_view.borrow().as_ref().context("添加自选没有打开")?.clone_strong();
+                    #[cfg(windows)]
+                    check_dialog_order(&app, w.window(), false)?;
                     w.set_query(app.replay.as_ref().unwrap().quotes[0].symbol[..6].into());
                     w.invoke_edited();
                     w.invoke_action("search".into());

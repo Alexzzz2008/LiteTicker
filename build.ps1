@@ -26,8 +26,13 @@ function Invoke-Cargo {
         $escaped = [regex]::Replace($escaped, '(\\+)$', '$1$1')
         '"' + $escaped + '"'
     }
-    $process = Start-Process -FilePath $cargo -ArgumentList ($quoted -join ' ') -WorkingDirectory $native -NoNewWindow -Wait -PassThru
-    try { if ($process.ExitCode -ne 0) { throw "Cargo failed with exit code $($process.ExitCode)." } }
+    $process = Start-Process -FilePath $cargo -ArgumentList ($quoted -join ' ') -WorkingDirectory $native -NoNewWindow -PassThru
+    try {
+        $null = $process.Handle
+        # Cargo owns the build result; MSVC helpers may outlive it.
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0) { throw "Cargo failed with exit code $($process.ExitCode)." }
+    }
     finally { $process.Dispose() }
 }
 

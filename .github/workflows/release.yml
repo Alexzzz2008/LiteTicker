@@ -63,8 +63,11 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $notesPath = Join-Path $env:RUNNER_TEMP 'liteticker-release-notes.md'
           $notes = @(
-            '轻盘 · 桌面看盘助手 v2：Rust + Slint 原生 Windows x64 正式版。',
-            '- 调整自选与盘口数字列对齐；右侧最近 10 笔成交与买卖五档共 10 行对应，修正悬停股票切换与分时价格刻度。',
+            ('轻盘 · 桌面看盘助手 ' + $env:RELEASE_TAG + ' 正式版。'),
+            '',
+            '### 本版修复',
+            '- 修正设置与添加自选对话框跟随主窗层级的问题，确保弹窗能够正常显示和操作。',
+            '- v2.0.0 用户可在设置的“版本与更新”中检查新版，使用“下载并重启”升级到本版。',
             '',
             '### 下载与安装',
             '- 下载 LiteTicker-win.zip，完整解压后运行 install.cmd；也可直接运行 LiteTicker.exe。',

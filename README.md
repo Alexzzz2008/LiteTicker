@@ -1,27 +1,24 @@
 # 轻盘 · 桌面看盘助手
 
-轻盘是一款轻量的桌面行情小窗，提供股票行情与盘口查看，支持自选股管理、数据源切换和个性化设置，以低资源占用和稳定刷新为核心。
+轻盘把股票行情、自选股和五档盘口放进一个可置顶的桌面行情小窗。鼠标停在股票名称上即可查看分时走势和最近成交。
 
-轻盘是独立的 **Windows x64 原生桌面程序**，使用 **Rust + Slint**，默认采用软件渲染。下载后即可运行，无需安装 .NET、Python、浏览器内核或 Rust 开发环境。图标采用深红底色的“轻”字。
-
-本页说明适用于 **v2.0.0 及更新的 Windows x64 原生版**。正式程序从本仓库的 [官方最新发布页](https://github.com/Alexzzz2008/LiteTicker/releases/latest) 下载；下载前先确认页面标签为 **v2.0.0 或更高版本**。
+**当前正式版为 v2.0.1，适用于 Windows x64。** 程序使用 Rust + Slint 和软件渲染，无需安装 .NET 或 VC++ 运行库。[GitHub 正式版](https://github.com/Alexzzz2008/LiteTicker/releases/tag/v2.0.1)
 
 ## 下载与使用
 
 ### 首次安装（推荐）
 
-1. 打开 [官方最新发布页](https://github.com/Alexzzz2008/LiteTicker/releases/latest)，在 **Assets（发布资产）** 中下载 `LiteTicker-win.zip`。
-2. 右键 ZIP，选择 **全部解压**。不要直接在压缩包内运行安装入口；解压后让 `LiteTicker.exe`、`LiteTicker.exe.sha256`、`install.ps1`、`install.cmd` 保持在同一文件夹。
-3. 双击解压目录中的 **`install.cmd`**。安装器会校验并复制程序、创建桌面快捷方式，然后自动启动轻盘。
-4. 以后双击桌面的 **“轻盘 · 桌面看盘助手”** 快捷方式启动。默认安装目录是 `%LOCALAPPDATA%\Programs\LiteTicker`；如果已有 `D:\LiteTicker\LiteTicker.exe`，则继续安装到 `D:\LiteTicker`。
-
-无需安装 .NET Framework、VC++ 运行库或 Rust。请下载发布资产，不要把 GitHub 的 **Source code** 或 **Code → Download ZIP** 源码压缩包当作安装包。
+1. 下载 [Windows 安装包](https://github.com/Alexzzz2008/LiteTicker/releases/download/v2.0.1/LiteTicker-win.zip)。如果 GitHub 下载缓慢，可用[代理下载](https://gh-proxy.com/https://github.com/Alexzzz2008/LiteTicker/releases/download/v2.0.1/LiteTicker-win.zip)。
+2. 右键 ZIP，选择 **全部解压**，然后双击解压目录中的 **`install.cmd`**。安装器会校验程序、创建桌面快捷方式并启动轻盘。
+3. 下次双击桌面的 **“轻盘 · 桌面看盘助手”** 即可启动。新安装默认保存在 `%LOCALAPPDATA%\Programs\LiteTicker`。
 
 ### 免安装运行
 
-在同一个发布页下载 **`LiteTicker.exe`**，放到准备长期保留的文件夹，直接双击运行；也可以完整解压 `LiteTicker-win.zip` 后直接运行其中的 EXE。此方式不会自动创建桌面快捷方式，以后仍从该文件夹启动。
+将单文件程序保存到准备长期使用的文件夹，双击 **`LiteTicker.exe`** 即可启动。也可以直接运行上述安装包里解压出的 EXE。[下载单文件程序](https://github.com/Alexzzz2008/LiteTicker/releases/download/v2.0.1/LiteTicker.exe) · [代理下载](https://gh-proxy.com/https://github.com/Alexzzz2008/LiteTicker/releases/download/v2.0.1/LiteTicker.exe)
 
-官方最新版直链：[安装包](https://github.com/Alexzzz2008/LiteTicker/releases/latest/download/LiteTicker-win.zip) · [单文件程序](https://github.com/Alexzzz2008/LiteTicker/releases/latest/download/LiteTicker.exe)。下载缓慢时可使用代理：[安装包加速](https://gh-proxy.com/https://github.com/Alexzzz2008/LiteTicker/releases/latest/download/LiteTicker-win.zip) · [单文件加速](https://gh-proxy.com/https://github.com/Alexzzz2008/LiteTicker/releases/latest/download/LiteTicker.exe)；版本号和校验文件仍以官方发布页为准。
+### 从 v2.0.0 更新
+
+在行情小窗右键打开 **设置 → 版本与更新**，点击 **检查更新**，看到 **v2.0.1** 后选择 **下载并重启**。重启后回到此页，确认“当前版本”为 v2.0.1。此次修复了股票列表置顶时遮住设置窗口的问题。
 
 ### 从 v1.0.5 升级
 
@@ -41,40 +38,38 @@
 - **隐藏：**行情窗右键选 **“隐藏到托盘”**，或关闭窗口、按 `Alt+F4`。隐藏后暂停行情请求，程序仍在运行。
 - **重新显示：**双击任务栏右侧的轻盘托盘图标，或在托盘菜单选 **“显示 / 隐藏”**；默认 `Ctrl+Alt+Q` 也可显示／隐藏。托盘图标可能收在任务栏的 **^（显示隐藏的图标）** 中。
 - **完全退出：**托盘右键选 **“退出轻盘”**，或行情窗右键选 **“退出”**。升级或移动 EXE 前先完全退出。
-- **确认版本：**行情窗右键选 **“设置”**，或托盘选 **“设置 / 快捷键”**，进入 **“版本与更新”**，查看 **“当前版本”**。本次升级完成后应显示 **v2.0.0**；以后以下载发布页的版本号为准。
+- **确认版本：**行情窗右键选 **“设置”**，或托盘选 **“设置 / 快捷键”**，进入 **“版本与更新”**，查看 **“当前版本”**。本次升级完成后应显示 **v2.0.1**；以后以下载发布页的版本号为准。
 
 ## 体积与内存
 
-2.0.0 的单文件程序约 **11.6 MiB**，ZIP 下载包约 **6.0 MiB**。1 MiB = 1,048,576 字节。
+Windows x64 单文件程序约 **11.7 MiB**，ZIP 安装包约 **6.1 MiB**。作为对照，v2.0.0 的 GitHub 下载件分别为 12,253,696 和 6,447,624 字节。1 MiB = 1,048,576 字节。
 
-| 本地实测场景 | 专用工作集（中位数） | 总工作集（中位数） |
-| --- | ---: | ---: |
-| 仅行情小窗 | 4.9 MiB | 35.2 MiB |
-| 行情小窗 + 固定盘口 | 9.9 MiB | 32.1 MiB |
+| Windows 11 实盘场景 | 专用工作集（中位数） | 总工作集（中位数） | 样本数 |
+| --- | ---: | ---: | ---: |
+| 仅行情小窗 | 13.1 MiB | 50.0 MiB | 60 |
+| 行情小窗和设置窗口 | 16.5 MiB | 53.5 MiB | 24 |
 
-实测环境为 Windows 11 x64、200% 缩放，使用正式 2.0.0 软件渲染版和默认字号。20 只自选固定回放、每秒刷新；主窗为 550×564 像素，盘口为 960×840 像素。每个场景独立启动，预热 20 秒后每秒采样，共 60 次，取中位数。
-
-专用工作集是进程独占的驻留物理内存，总工作集还包含共享页，数值会随系统调度波动。以上为单机短测；真实行情请求、自选数量、字号和打开的页面会影响实际占用。
+测量使用 GitHub 下载的 v2.0.0，运行于 Windows 11 x64，系统缩放为 200%。程序加载 9 只自选股，通过腾讯接口每秒请求行情。两个场景分别观察约 51 秒和 23 秒，按同一进程的 Windows 工作集计数取中位数。专用工作集是进程独占的驻留物理内存，总工作集还包括共享页。自选数量、打开的页面和系统调度都会影响读数。
 
 ## 界面预览
 
-以下为 v2.0.0 正式程序的实际界面，使用固定行情回放展示布局；图中数据用于界面演示。
+行情截图取自 2026 年 11 月 17 日北京时间 13:53 的腾讯盘中行情快照。平安银行（000001.SZ）的分时曲线包含接口返回的 176 个分钟点，五档旁列出当时最近的 10 笔成交。
 
 **桌面行情小窗**
 
-![v2.0.0桌面股票行情与自选股](assets/screenshots/desktop-quotes.png)
+![桌面行情小窗中的十二只自选股](assets/screenshots/desktop-quotes.png)
 
 **盘口、分时与五档**
 
-![v2.0.0五档盘口、分时图和十行近期成交](assets/screenshots/depth-and-menu.png)
+![平安银行真实盘中分时、五档盘口及最近十笔成交](assets/screenshots/depth-and-menu.png)
 
 **设置界面**
 
-![v2.0.0轻盘深红设置界面](assets/screenshots/settings.png)
+![轻盘设置界面](assets/screenshots/settings.png)
 
 **添加自选**
 
-![v2.0.0编号搜索与多选添加](assets/screenshots/add-symbols.png)
+![按编号搜索股票并加入自选](assets/screenshots/add-symbols.png)
 
 ## 功能
 
@@ -118,8 +113,8 @@
 
 ## 本地数据
 
-设置与自选列表保存在 `%LOCALAPPDATA%\LiteTicker\settings.json`，不上传到 GitHub。2.0.0 兼容 v1.0.5 的正式配置，保留自选顺序、数据源、字号、快捷键和窗口位置。复制此文件可迁移自选和设置；复制前先在托盘中退出轻盘。保存设置时先写临时文件，再替换原文件，并保留上一份 `settings.json.bak`。
+设置与自选列表保存在 `%LOCALAPPDATA%\LiteTicker\settings.json`，不上传到 GitHub。原生版兼容 v1.0.5 的正式配置，保留自选顺序、数据源、字号、快捷键和窗口位置。复制此文件可迁移自选和设置；复制前先在托盘中退出轻盘。保存设置时先写临时文件，再替换原文件，并保留上一份 `settings.json.bak`。
 
 已有正式配置时以它为准；若只使用过 Rust 预览且没有正式配置，首次启动会从同一用户的 `%LOCALAPPDATA%\LiteTicker-preview\settings.json` 复制自选和设置。
 
-2.0.0 的更新包来自本仓库的 GitHub Releases，下载后校验 SHA-256、大小以及原生程序身份和版本。替换程序时保留 `LiteTicker.exe.previous` 旧版备份；自选股和设置不包含在更新包中。
+原生版的更新包来自本仓库的 GitHub Releases，下载后校验 SHA-256、大小以及原生程序身份和版本。替换程序时保留 `LiteTicker.exe.previous` 旧版备份；自选股和设置不包含在更新包中。
