@@ -9,9 +9,9 @@ fn main() {
         .expect("Slint interface must compile");
         if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
             println!("cargo:rerun-if-changed=../assets/liteticker.ico");
-            println!("cargo:rerun-if-changed=preview.rc");
-            println!("cargo:rerun-if-changed=preview.manifest");
-            embed_resource::compile("preview.rc", embed_resource::NONE)
+            println!("cargo:rerun-if-changed=LiteTicker.rc");
+            println!("cargo:rerun-if-changed=LiteTicker.manifest");
+            embed_resource::compile("LiteTicker.rc", embed_resource::NONE)
                 .manifest_required()
                 .unwrap();
         }

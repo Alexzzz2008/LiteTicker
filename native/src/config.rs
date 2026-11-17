@@ -22,12 +22,12 @@ impl SettingsStore {
     pub fn file_path(&self) -> PathBuf {
         self.directory_path.join("settings.json")
     }
-    /// The first preview starts with the current user's v1 settings. Only the preview store is writable.
-    pub fn load_preview(&self, installed: &SettingsStore) -> Result<AppSettings> {
-        if self.file_path().try_exists()? || !installed.file_path().try_exists()? {
+    /// Existing v1/v2 settings take precedence over a one-time import from the preview.
+    pub fn load_or_import_preview(&self, preview: &SettingsStore) -> Result<AppSettings> {
+        if self.file_path().try_exists()? || !preview.file_path().try_exists()? {
             return self.load();
         }
-        let settings = installed.load()?;
+        let settings = preview.load()?;
         self.save(&settings)?;
         Ok(settings)
     }

@@ -147,14 +147,14 @@ fn main() {
         #[cfg(windows)]
         {
             use windows_sys::Win32::UI::WindowsAndMessaging::*;
-            let message = format!("轻盘预览启动失败\n{e:#}\0")
+            let message = format!("轻盘启动失败\n{e:#}\0")
                 .encode_utf16()
                 .collect::<Vec<_>>();
             unsafe {
                 MessageBoxW(
                     std::ptr::null_mut(),
                     message.as_ptr(),
-                    windows_sys::w!("轻盘预览"),
+                    windows_sys::w!("轻盘"),
                     MB_ICONERROR,
                 );
             }
@@ -188,7 +188,7 @@ fn launch() -> Result<()> {
     let _instance = if file.is_some() {
         None
     } else {
-        let Some(instance) = InstanceGuard::acquire(true)? else {
+        let Some(instance) = InstanceGuard::acquire()? else {
             return Ok(());
         };
         Some(instance)
@@ -200,11 +200,11 @@ fn launch() -> Result<()> {
     let dir = env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(env::temp_dir);
-    let store = SettingsStore::new(dir.join("LiteTicker-preview"));
+    let store = SettingsStore::new(dir.join("LiteTicker"));
     let mut settings = if replay.is_some() {
         AppSettings::default()
     } else {
-        store.load_preview(&SettingsStore::new(dir.join("LiteTicker")))?
+        store.load_or_import_preview(&SettingsStore::new(dir.join("LiteTicker-preview")))?
     };
     if let Some(r) = &replay {
         settings.symbols = r.quotes.iter().map(|q| q.symbol.clone()).collect();
@@ -298,7 +298,6 @@ fn launch() -> Result<()> {
                 let p = DesktopPlatform::new(
                     next.window.window(),
                     move |cmd| with_app(|a| a.desktop(cmd)),
-                    true,
                     next.replay.is_none(),
                 )?;
                 let settings = next.settings.borrow();

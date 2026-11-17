@@ -64,7 +64,7 @@ impl App {
             }
             Ok(None) => {
                 self.update_latest.replace(format!("v{VERSION}"));
-                format!("已检查，当前使用最新预览版 v{VERSION}。")
+                format!("已检查，当前使用最新正式版 v{VERSION}。")
             }
             Err(e) => {
                 self.update_latest.replace("暂不可用".into());

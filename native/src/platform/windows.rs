@@ -42,23 +42,11 @@ const fn rgb(r: u32, g: u32, b: u32) -> u32 {
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(Some(0)).collect()
 }
-fn title(preview: bool) -> &'static str {
-    if preview {
-        "轻盘 · 桌面看盘助手 · Rust 预览"
-    } else {
-        PRODUCT
-    }
-}
-
 pub struct InstanceGuard(HANDLE);
 impl InstanceGuard {
-    /// `None` means the existing instance was asked to show. Preview never targets v1.0.5.
-    pub fn acquire(preview: bool) -> Result<Option<Self>> {
-        let name = wide(if preview {
-            "Local\\LiteTicker.Desktop.RustPreview"
-        } else {
-            "Local\\LiteTicker.Desktop"
-        });
+    /// A second launch wakes the active instance, including v1.0.5 during migration.
+    pub fn acquire() -> Result<Option<Self>> {
+        let name = wide("Local\\LiteTicker.Desktop");
         unsafe {
             let handle = CreateMutexW(null(), 0, name.as_ptr());
             if handle.is_null() {
@@ -67,7 +55,7 @@ impl InstanceGuard {
             let exists = GetLastError() == ERROR_ALREADY_EXISTS;
             if exists {
                 CloseHandle(handle);
-                let hwnd = FindWindowW(null(), wide(title(preview)).as_ptr());
+                let hwnd = FindWindowW(null(), wide(PRODUCT).as_ptr());
                 if !hwnd.is_null() {
                     PostMessageW(hwnd, WAKE, 0, 0);
                     SetForegroundWindow(hwnd);
@@ -137,7 +125,6 @@ fn defer(id: usize, action: Action) {
 struct NativeState {
     hwnd: HWND,
     id: usize,
-    preview: bool,
     alive: Rc<Cell<bool>>,
     hotkeys: RefCell<Hotkeys>,
     enable_hotkeys: bool,
@@ -159,7 +146,6 @@ impl DesktopPlatform {
     pub fn new(
         window: &slint::Window,
         callback: impl Fn(DesktopCommand) + 'static,
-        preview: bool,
         enable_hotkeys: bool,
     ) -> Result<Self> {
         let provider = window.window_handle();
@@ -200,7 +186,6 @@ impl DesktopPlatform {
         let state = Box::new(NativeState {
             hwnd,
             id,
-            preview,
             alive,
             hotkeys: RefCell::new(Hotkeys::default()),
             enable_hotkeys,
@@ -233,7 +218,7 @@ impl DesktopPlatform {
             {
                 bail!("无法挂接轻盘桌面消息");
             }
-            SetWindowTextW(hwnd, wide(title(preview)).as_ptr());
+            SetWindowTextW(hwnd, wide(PRODUCT).as_ptr());
             let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
             SetWindowLongPtrW(
                 hwnd,
@@ -421,7 +406,7 @@ impl NativeState {
         data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         data.uCallbackMessage = TRAY;
         data.hIcon = self.icon;
-        let tip = wide(title(self.preview));
+        let tip = wide(PRODUCT);
         let count = (tip.len() - 1).min(data.szTip.len() - 1);
         data.szTip[..count].copy_from_slice(&tip[..count]);
         data

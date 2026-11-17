@@ -1,6 +1,6 @@
 [package]
 name = "liteticker-native"
-version = "1.0.6-preview.3"
+version = "2.0.0"
 edition = "2024"
 rust-version = "1.95"
 publish = false
@@ -11,7 +11,7 @@ name = "liteticker_native"
 path = "src/lib.rs"
 
 [[bin]]
-name = "LiteTicker-preview"
+name = "LiteTicker"
 path = "src/main.rs"
 required-features = ["gui"]
 

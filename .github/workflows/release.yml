@@ -4,81 +4,95 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing stable tag to publish, for example v2.0.0'
+        required: true
+        type: string
 
 permissions:
   contents: write
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   release:
     if: github.repository == 'Alexzzz2008/LiteTicker'
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 90
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      RUSTUP_TOOLCHAIN: '1.96.0'
     defaults:
       run:
         shell: pwsh
     steps:
-      - name: Check out tagged source
+      - name: Check out release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.tag || github.ref_name }}
           persist-credentials: false
 
-      - name: Build and test
-        run: .\build.ps1 -Test
-
-      - name: Package Windows installer
-        run: .\package.ps1
-
-      - name: Verify version and prepare checksums
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
+      - name: Verify stable native version
         run: |
           $ErrorActionPreference = 'Stop'
-          $source = Get-Content -LiteralPath .\src\AppVersion.cs -Raw
-          $match = [regex]::Match($source, 'public\s+const\s+string\s+Current\s*=\s*"(?<version>[0-9]+\.[0-9]+\.[0-9]+)"\s*;')
-          if (-not $match.Success) { throw 'AppVersion.Current must contain a stable three-part version.' }
-          $version = $match.Groups['version'].Value
-          if ($env:RELEASE_TAG -cne ('v' + $version)) { throw 'Release tag does not match AppVersion.Current.' }
-          $checksums = foreach ($name in @('LiteTicker.exe', 'LiteTicker-win.zip')) {
-            $checksum = (Get-FileHash -LiteralPath (Join-Path .\dist $name) -Algorithm SHA256).Hash.ToLowerInvariant()
-            $checksum + '  ' + $name
-          }
-          [IO.File]::WriteAllText((Join-Path (Resolve-Path .\dist).ProviderPath 'SHA256SUMS.txt'), (($checksums -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))
+          . .\scripts\verify-native.ps1
+          $version = Get-NativeVersion $PWD.ProviderPath
+          if ($env:RELEASE_TAG -cne ('v' + $version)) { throw 'Release tag does not match native/Cargo.toml.' }
+          git rev-parse --verify ('refs/tags/' + $env:RELEASE_TAG + '^{commit}')
+          if ($LASTEXITCODE -ne 0) { throw 'Release requires an existing tag.' }
 
-      - name: Publish release
+      - name: Install pinned Rust MSVC toolchain
+        run: |
+          rustup toolchain install 1.96.0 --profile minimal --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain installation failed.' }
+
+      - name: Build and test native Windows x64
+        run: .\build.ps1 -Test
+
+      - name: Package installer and checksums
+        run: .\package.ps1
+
+      - name: Publish native stable release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           $ErrorActionPreference = 'Stop'
           $notesPath = Join-Path $env:RUNNER_TEMP 'liteticker-release-notes.md'
           $notes = @(
-            '轻盘 · 桌面看盘助手正式版。',
-            '',
-            '### 本版改进',
-            '- 右键菜单和托盘菜单统一为黑色、深红风格，加大默认字号并跟随全局缩放。',
-            '- 添加自选页面与设置界面保持一致，统一输入、列表、选中和按钮状态。',
-            '- 保留编号与首字母搜索、多选添加、快捷键和异步取消交互。',
-            '- 内置 gh-proxy.com 更新下载代理，保留官方版本与摘要核验及失败回退。',
-            '- 首次运行使用默认设置，配置按当前 Windows 用户保存。',
+            '轻盘 · 桌面看盘助手 v2：Rust + Slint 原生 Windows x64 正式版。',
+            '- 调整自选与盘口数字列对齐；右侧最近 10 笔成交与买卖五档共 10 行对应，修正悬停股票切换与分时价格刻度。',
             '',
             '### 下载与安装',
-            '- 首次安装：下载 LiteTicker-win.zip，完整解压后运行 install.cmd。',
-            '- 需要 .NET Framework 4.8 或更新的 4.x；缺少时安装入口会提示并引导微软官方下载。',
-            '- 已有运行环境：可直接使用 LiteTicker.exe。',
+            '- 下载 LiteTicker-win.zip，完整解压后运行 install.cmd；也可直接运行 LiteTicker.exe。',
+            '- 原生 x64 单文件程序，静态链接 CRT，无需安装 .NET Framework 或 VC++ 运行库。',
+            '- 安装器也可在没有本地 EXE 时从本仓库的最新正式 Release 下载并校验。',
             '',
-            '### 版本与更新',
-            '- 在设置中查看版本、检查更新或下载并重启，保留自选股和设置。',
-            '- SHA256SUMS.txt 提供程序与安装包校验和。',
-            '- 主要功能及界面截图见仓库 README。'
+            '### 从 v1.0.5 升级',
+            '- 本次跨技术栈升级需要手动安装：先在旧版托盘菜单中选择退出，再运行新版安装入口。',
+            '- v1.0.5 的 .NET 更新器不能安装原生程序；其程序集校验会拒绝新格式并保留旧版。',
+            '- 安装保留当前用户的自选股与设置；已有 D:\LiteTicker 安装会继续使用该目录。',
+            '',
+            '### v2 后续更新',
+            '- 在设置中检查更新、下载并重启，校验官方版本与 SHA256 摘要。',
+            '- LiteTicker.exe.sha256、LiteTicker-win.zip.sha256 与 SHA256SUMS.txt 提供下载校验。',
+            '- 功能说明和最新界面截图见仓库 README。'
           )
           [IO.File]::WriteAllText($notesPath, (($notes -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))
-          gh release create $env:RELEASE_TAG .\dist\LiteTicker.exe .\dist\LiteTicker-win.zip .\dist\SHA256SUMS.txt --repo Alexzzz2008/LiteTicker --verify-tag --title ('轻盘 · 桌面看盘助手 ' + $env:RELEASE_TAG + ' 正式版') --notes-file $notesPath --latest
+          $names = @('LiteTicker.exe', 'LiteTicker.exe.sha256', 'LiteTicker-win.zip', 'LiteTicker-win.zip.sha256', 'SHA256SUMS.txt')
+          $files = @($names | ForEach-Object { Join-Path .\dist $_ })
+          gh release create $env:RELEASE_TAG @files --repo Alexzzz2008/LiteTicker --verify-tag --title ('轻盘 · 桌面看盘助手 ' + $env:RELEASE_TAG + ' 正式版') --notes-file $notesPath --latest
           if ($LASTEXITCODE -ne 0) { throw 'Release publication failed.' }
           $releaseJson = gh api ('repos/Alexzzz2008/LiteTicker/releases/tags/' + $env:RELEASE_TAG)
-          if ($LASTEXITCODE -ne 0) { throw 'Published release asset could not be inspected.' }
+          if ($LASTEXITCODE -ne 0) { throw 'Published release could not be inspected.' }
           $release = $releaseJson | ConvertFrom-Json
-          foreach ($name in @('LiteTicker.exe', 'LiteTicker-win.zip')) {
+          if ($release.draft -or $release.prerelease -or $release.tag_name -cne $env:RELEASE_TAG) { throw 'Published release identity is incorrect.' }
+          foreach ($name in $names) {
             $assets = @($release.assets | Where-Object { $_.name -ceq $name })
-            $expected = 'sha256:' + (Get-FileHash -LiteralPath (Join-Path .\dist $name) -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ($assets.Count -ne 1 -or $assets[0].digest -cne $expected) { throw ('Published asset digest does not match: ' + $name) }
+            $file = Join-Path .\dist $name
+            $expected = 'sha256:' + (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($assets.Count -ne 1 -or $assets[0].size -ne (Get-Item -LiteralPath $file).Length -or $assets[0].digest -cne $expected) { throw ('Published asset size/digest does not match: ' + $name) }
           }

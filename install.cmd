@@ -15,12 +15,9 @@ pause
 exit /b %LITETICKER_INSTALL_EXIT%
 
 :powershell_unavailable
-echo 无法启动 Windows PowerShell。请先检查 Windows PowerShell 或系统组件是否可用。
-echo 如果系统提示缺少 .NET Framework，请从微软官网下载 .NET Framework 4.8 或更新版本：
-echo https://dotnet.microsoft.com/zh-cn/download/dotnet-framework/net48
-set "LITETICKER_OPEN_PAGE="
-set /p "LITETICKER_OPEN_PAGE=输入 Y 打开微软官方下载页面，直接回车取消："
-if /i "%LITETICKER_OPEN_PAGE%"=="Y" start "" "https://dotnet.microsoft.com/zh-cn/download/dotnet-framework/net48"
-echo 安装未开始。修复系统组件或安装运行库后，请重新运行 install.cmd。
+echo 无法启动 Windows PowerShell。请检查或修复 Windows PowerShell 系统组件。
+echo 轻盘 v2 为 Windows x64 原生程序，无需安装 .NET Framework 或 VC++ 运行库。
+echo 也可从官方 Releases 下载 LiteTicker-win.zip，解压后直接运行 LiteTicker.exe。
+echo https://github.com/Alexzzz2008/LiteTicker/releases/latest
 pause
 exit /b 1

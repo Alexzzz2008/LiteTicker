@@ -50,11 +50,11 @@ fn block(key: &str, kind: u16, value: &[u8], children: Vec<Vec<u8>>) -> Vec<u8> 
     put16(&mut result, 4, kind);
     result
 }
-fn next_preview_version() -> &'static str {
+fn next_release_version() -> &'static str {
     static NEXT: OnceLock<String> = OnceLock::new();
     NEXT.get_or_init(|| {
-        let PreviewVersion(major, minor, patch, n) = version(crate::VERSION).unwrap();
-        format!("{major}.{minor}.{patch}-preview.{}", n + 1)
+        let ReleaseVersion(major, minor, patch) = version(crate::VERSION).unwrap();
+        format!("{major}.{minor}.{}", patch.checked_add(1).unwrap())
     })
 }
 fn executable(name: &str, product: &str, managed: bool) -> Vec<u8> {
@@ -120,12 +120,12 @@ fn executable(name: &str, product: &str, managed: bool) -> Vec<u8> {
     file
 }
 fn release(name: &str, bytes: &[u8]) -> Release {
-    let tag = format!("native-v{name}");
+    let tag = format!("v{name}");
     Release {
         version: name.into(),
         sha256: hex(&Sha256::digest(bytes)),
         size: bytes.len() as u64,
-        notes: "原生预览测试".into(),
+        notes: "正式更新测试".into(),
         download_url: Url::parse(&format!(
             "https://github.com/Alexzzz2008/LiteTicker/releases/download/{tag}/{ASSET}"
         ))
@@ -137,7 +137,16 @@ fn release(name: &str, bytes: &[u8]) -> Release {
     }
 }
 fn metadata(release: &Release) -> serde_json::Value {
-    json!({"tag_name":release_tag(release),"html_url":release.page_url.as_str(),"draft":false,"prerelease":true,"body":release.notes,"assets":[{"name":ASSET,"state":"uploaded","size":release.size,"digest":format!("sha256:{}",release.sha256),"browser_download_url":release.download_url.as_str()}]})
+    json!({"tag_name":release_tag(release),"html_url":release.page_url.as_str(),"draft":false,"prerelease":false,"body":release.notes,"assets":[{"name":ASSET,"state":"uploaded","size":release.size,"digest":format!("sha256:{}",release.sha256),"browser_download_url":release.download_url.as_str()}]})
+}
+fn with_checksum(release: &Release, body: &[u8]) -> serde_json::Value {
+    let mut metadata = metadata(release);
+    metadata["assets"][0]["digest"] = serde_json::Value::Null;
+    metadata["assets"].as_array_mut().unwrap().push(json!({
+        "name":CHECKSUM_ASSET,"state":"uploaded","size":body.len(),
+        "browser_download_url":format!("{}.sha256",release.download_url)
+    }));
+    metadata
 }
 struct Temp(PathBuf);
 impl Temp {
@@ -186,32 +195,39 @@ impl Server {
         let handle = thread::spawn(move || {
             for reply in replies {
                 let deadline = Instant::now() + Duration::from_secs(15);
-                let mut stream = loop {
+                let (mut stream, bytes) = loop {
                     if stopped.load(Ordering::Relaxed) || Instant::now() > deadline {
                         return;
                     }
-                    match listener.accept() {
-                        Ok((s, _)) => break s,
+                    let mut stream = match listener.accept() {
+                        Ok((s, _)) => s,
                         Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                            thread::sleep(Duration::from_millis(2))
+                            thread::sleep(Duration::from_millis(2));
+                            continue;
                         }
                         Err(e) => panic!("{e}"),
+                    };
+                    // Winsock accept inherits the listener's nonblocking mode.
+                    stream.set_nonblocking(false).unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .unwrap();
+                    let mut bytes = Vec::new();
+                    let mut buf = [0; 1024];
+                    while !bytes.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match stream.read(&mut buf) {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => bytes.extend_from_slice(&buf[..n]),
+                        }
+                        if bytes.len() > 16384 {
+                            break;
+                        }
+                    }
+                    // A cancelled connection must not consume the next fixture reply.
+                    if bytes.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break (stream, bytes);
                     }
                 };
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(2)))
-                    .unwrap();
-                let mut bytes = Vec::new();
-                let mut buf = [0; 1024];
-                while !bytes.windows(4).any(|w| w == b"\r\n\r\n") {
-                    match stream.read(&mut buf) {
-                        Ok(0) | Err(_) => break,
-                        Ok(n) => bytes.extend_from_slice(&buf[..n]),
-                    }
-                    if bytes.len() > 16384 {
-                        break;
-                    }
-                }
                 logged
                     .lock()
                     .unwrap()
@@ -223,6 +239,7 @@ impl Server {
                     .unwrap_or_default();
                 let _=stream.write_all(format!("HTTP/1.1 {} Fixture\r\nContent-Length: {}\r\n{location}Connection: close\r\n\r\n",reply.status,reply.body.len()).as_bytes());
                 let _ = stream.write_all(&reply.body);
+                let _ = stream.shutdown(std::net::Shutdown::Write);
             }
         });
         Self {
@@ -250,31 +267,36 @@ impl Drop for Server {
 }
 
 #[test]
-fn only_independent_prerelease_tags_and_official_assets_are_accepted() {
-    let bytes = executable(next_preview_version(), PRODUCT, false);
-    let r = release(next_preview_version(), &bytes);
-    assert!(parse_release(&metadata(&r)).is_ok());
+fn only_v2_stable_tags_and_official_assets_are_accepted() {
+    let bytes = executable(next_release_version(), PRODUCT, false);
+    let r = release(next_release_version(), &bytes);
+    assert!(parse_release(&metadata(&r), None).is_ok());
     for tag in [
-        "v1.0.6",
-        "native-v1.0.6",
-        "native-v01.0.6-preview.2",
-        "native-v1.0.6-preview.0",
+        "v1.0.5",
+        "native-v2.0.1-preview.1",
+        "v02.0.1",
+        "v2.0.1-preview.1",
+        "v2.0.1.0",
+        "2.0.1",
+        "v2.0",
+        "v2.0.65536",
+        "v2.0.1\n",
     ] {
         let mut m = metadata(&r);
         m["tag_name"] = json!(tag);
-        assert!(parse_release(&m).is_err());
+        assert!(parse_release(&m, None).is_err());
     }
-    for (key, value) in [("prerelease", json!(false)), ("draft", json!(true))] {
+    for (key, value) in [("prerelease", json!(true)), ("draft", json!(true))] {
         let mut m = metadata(&r);
         m[key] = value;
-        assert!(parse_release(&m).is_err());
+        assert!(parse_release(&m, None).is_err());
     }
     for (field, value) in [
         ("size", json!(0)),
         ("size", json!(LIMIT + 1)),
         ("size", json!(1.5)),
         ("digest", json!("sha256:no")),
-        ("name", json!("LiteTicker.exe")),
+        ("name", json!("LiteTicker-preview.exe")),
         ("state", json!("new")),
         (
             "browser_download_url",
@@ -283,22 +305,29 @@ fn only_independent_prerelease_tags_and_official_assets_are_accepted() {
     ] {
         let mut m = metadata(&r);
         m["assets"][0][field] = value;
-        assert!(parse_release(&m).is_err());
+        assert!(parse_release(&m, None).is_err());
     }
     let mut m = metadata(&r);
     let asset = m["assets"][0].clone();
     m["assets"].as_array_mut().unwrap().push(asset);
-    assert!(parse_release(&m).is_err());
+    assert!(parse_release(&m, None).is_err());
 }
 #[test]
 fn native_identity_refuses_managed_wrong_product_corrupt_headers_and_version() {
-    let bytes = executable(next_preview_version(), PRODUCT, false);
+    let bytes = executable(next_release_version(), PRODUCT, false);
     assert_eq!(
         native_identity(&bytes).unwrap().version,
-        version(next_preview_version()).unwrap()
+        version(next_release_version()).unwrap()
     );
-    assert!(native_identity(&executable(next_preview_version(), PRODUCT, true)).is_err());
-    assert!(native_identity(&executable(next_preview_version(), "LiteTicker", false)).is_err());
+    assert!(native_identity(&executable(next_release_version(), PRODUCT, true)).is_err());
+    assert!(
+        native_identity(&executable(
+            next_release_version(),
+            "LiteTicker Preview",
+            false
+        ))
+        .is_err()
+    );
     for n in [0, 1, 63, 128, 255, 511] {
         assert!(native_identity(&bytes[..n]).is_err());
     }
@@ -315,8 +344,8 @@ fn native_identity_refuses_managed_wrong_product_corrupt_headers_and_version() {
 #[test]
 fn download_hops_are_bounded_to_fixed_proxy_or_github_cdn() {
     let r = release(
-        next_preview_version(),
-        &executable(next_preview_version(), PRODUCT, false),
+        next_release_version(),
+        &executable(next_release_version(), PRODUCT, false),
     );
     for uri in [
         r.download_url.as_str(),
@@ -324,12 +353,13 @@ fn download_hops_are_bounded_to_fixed_proxy_or_github_cdn() {
         "https://objects.githubusercontent.com/asset",
         "https://github-releases.githubusercontent.com/asset",
     ] {
-        assert!(validate_hop(&Url::parse(uri).unwrap(), &r).is_ok());
+        assert!(validate_hop(&Url::parse(uri).unwrap(), &r.download_url, true).is_ok());
     }
     assert!(
         validate_hop(
             &Url::parse(&format!("https://gh-proxy.com/{}", r.download_url)).unwrap(),
-            &r
+            &r.download_url,
+            true
         )
         .is_ok()
     );
@@ -341,23 +371,27 @@ fn download_hops_are_bounded_to_fixed_proxy_or_github_cdn() {
         "https://gh-proxy.com/https://evil.example/a",
         "https://github.com/Alexzzz2008/LiteTicker/releases/download/v1.0.5/LiteTicker.exe",
     ] {
-        assert!(validate_hop(&Url::parse(uri).unwrap(), &r).is_err());
+        assert!(validate_hop(&Url::parse(uri).unwrap(), &r.download_url, true).is_err());
     }
 }
 #[tokio::test]
 async fn check_new_equal_unavailable_and_failures_are_distinct() {
     let temp = Temp::new();
-    let bytes = executable(next_preview_version(), PRODUCT, false);
-    let newer = release(next_preview_version(), &bytes);
+    let bytes = executable(next_release_version(), PRODUCT, false);
+    let newer = release(next_release_version(), &bytes);
     let current = release(crate::VERSION, &executable(crate::VERSION, PRODUCT, false));
-    let old = release(
-        "1.0.5-preview.1",
-        &executable("1.0.5-preview.1", PRODUCT, false),
-    );
+    let old = json!({"tag_name":"v1.0.5","draft":false,"prerelease":false});
+    let mut prerelease = metadata(&release("2.100.0", &bytes));
+    prerelease["prerelease"] = json!(true);
+    let mut draft = metadata(&release("2.200.0", &bytes));
+    draft["draft"] = json!(true);
     let server = Server::new(vec![
         Reply::body(
             serde_json::to_vec(&json!([
-                metadata(&old),
+                old,
+                prerelease,
+                draft,
+                {"tag_name":"native-v2.300.0-preview.1"},
                 metadata(&newer),
                 metadata(&current)
             ]))
@@ -379,10 +413,10 @@ async fn check_new_equal_unavailable_and_failures_are_distinct() {
     assert_eq!(
         c.check(CancellationToken::new())
             .await
-            .unwrap()
+            .unwrap_or_else(|e| panic!("{e:#}; requests={:?}", server.requests.lock().unwrap()))
             .unwrap()
             .version,
-        next_preview_version()
+        next_release_version()
     );
     assert!(c.check(CancellationToken::new()).await.unwrap().is_none());
     for _ in 0..2 {
@@ -399,11 +433,221 @@ async fn check_new_equal_unavailable_and_failures_are_distinct() {
     }
     assert_eq!(server.count(), 6);
 }
+#[test]
+fn checksum_is_one_exact_executable_record_and_digest_has_priority() {
+    let bytes = executable(next_release_version(), PRODUCT, false);
+    let release = release(next_release_version(), &bytes);
+    let hash = release.sha256.to_ascii_uppercase();
+    for body in [
+        hash.clone(),
+        format!("{hash}  LiteTicker.exe\n"),
+        format!("{hash} *LiteTicker.exe\r\n"),
+    ] {
+        assert_eq!(checksum_file(body.as_bytes()).unwrap(), release.sha256);
+    }
+    for body in [
+        format!("{hash}  other.exe\n"),
+        format!("{hash}  LiteTicker-preview.exe\n"),
+        format!("{hash}\n{hash}\n"),
+        format!(" {hash}\n"),
+        format!("{hash}junk"),
+        "bad".into(),
+    ] {
+        assert!(checksum_file(body.as_bytes()).is_err());
+    }
+    assert!(checksum_file(&[0xff]).is_err());
+    let mut metadata = metadata(&release);
+    metadata["assets"][0]["digest"] = json!(format!("sha256:{hash}"));
+    assert_eq!(
+        parse_release(&metadata, Some(&"0".repeat(64)))
+            .unwrap()
+            .sha256,
+        release.sha256
+    );
+    metadata["assets"][0]["digest"] = json!("sha512:wrong");
+    assert!(parse_release(&metadata, Some(&release.sha256)).is_err());
+    metadata["assets"][0]["digest"] = serde_json::Value::Null;
+    assert!(parse_release(&metadata, None).is_err());
+    assert_eq!(
+        parse_release(&metadata, Some(&release.sha256))
+            .unwrap()
+            .sha256,
+        release.sha256
+    );
+}
+#[tokio::test]
+async fn missing_digest_uses_only_the_same_official_release_checksum() {
+    let temp = Temp::new();
+    let bytes = executable(next_release_version(), PRODUCT, false);
+    let release = release(next_release_version(), &bytes);
+    let body = format!("{}  LiteTicker.exe\n", release.sha256).into_bytes();
+    let metadata = with_checksum(&release, &body);
+    let server = Server::new(vec![
+        Reply::body(serde_json::to_vec(&json!([metadata])).unwrap()),
+        Reply::body(body),
+    ]);
+    let found = server
+        .client(&temp)
+        .check(CancellationToken::new())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(found.sha256, release.sha256);
+    assert_eq!(server.count(), 2);
+    let requests = server.requests.lock().unwrap();
+    assert!(
+        requests[1].starts_with(&format!(
+            "GET /Alexzzz2008/LiteTicker/releases/download/v{}/LiteTicker.exe.sha256 ",
+            release.version
+        )),
+        "{}",
+        requests[1]
+    );
+    assert!(!requests[1].contains("gh-proxy"));
+    assert_eq!(fs::read_dir(&temp.0).unwrap().count(), 0);
+}
+#[tokio::test]
+async fn invalid_checksum_metadata_is_rejected_before_any_asset_request() {
+    let temp = Temp::new();
+    let bytes = executable(next_release_version(), PRODUCT, false);
+    let release = release(next_release_version(), &bytes);
+    let body = format!("{}  LiteTicker.exe\n", release.sha256).into_bytes();
+    let mut invalid = vec![];
+    for (field, value) in [
+        ("size", json!(257)),
+        ("size", json!(63)),
+        ("state", json!("new")),
+        (
+            "browser_download_url",
+            json!(format!(
+                "https://gh-proxy.com/{}.sha256",
+                release.download_url
+            )),
+        ),
+        (
+            "browser_download_url",
+            json!(format!("{}.sha256?download=1", release.download_url)),
+        ),
+        (
+            "browser_download_url",
+            json!(
+                "https://github.com/Alexzzz2008/LiteTicker/releases/download/v1.0.5/LiteTicker.exe.sha256"
+            ),
+        ),
+        (
+            "browser_download_url",
+            json!(
+                "https://github.com/other/LiteTicker/releases/download/v2.0.1/LiteTicker.exe.sha256"
+            ),
+        ),
+        (
+            "browser_download_url",
+            json!(
+                "http://github.com/Alexzzz2008/LiteTicker/releases/download/v2.0.1/LiteTicker.exe.sha256"
+            ),
+        ),
+    ] {
+        let mut metadata = with_checksum(&release, &body);
+        metadata["assets"][1][field] = value;
+        invalid.push(metadata);
+    }
+    let mut duplicate = with_checksum(&release, &body);
+    let asset = duplicate["assets"][1].clone();
+    duplicate["assets"].as_array_mut().unwrap().push(asset);
+    invalid.push(duplicate);
+    let mut missing = with_checksum(&release, &body);
+    missing["assets"].as_array_mut().unwrap().pop();
+    invalid.push(missing);
+    let mut digest = with_checksum(&release, &body);
+    digest["assets"][0]["digest"] = json!("sha256:broken");
+    invalid.push(digest);
+    for metadata in invalid {
+        let server = Server::new(vec![Reply::body(
+            serde_json::to_vec(&json!([metadata])).unwrap(),
+        )]);
+        assert!(
+            server
+                .client(&temp)
+                .check(CancellationToken::new())
+                .await
+                .is_err()
+        );
+        assert_eq!(server.count(), 1);
+    }
+}
+#[tokio::test]
+async fn checksum_network_size_content_redirect_and_cancellation_fail_explicitly() {
+    let temp = Temp::new();
+    let bytes = executable(next_release_version(), PRODUCT, false);
+    let release = release(next_release_version(), &bytes);
+    let body = format!("{}  LiteTicker.exe\n", release.sha256).into_bytes();
+    for reply in [
+        Reply {
+            status: 404,
+            ..Reply::body(vec![])
+        },
+        Reply::body(vec![b'0'; 257]),
+        Reply::body(vec![b'0'; 64]),
+        Reply::body(format!("{}  other_file.exe\n", release.sha256).into_bytes()),
+        Reply {
+            status: 302,
+            location: Some(format!(
+                "https://gh-proxy.com/{}.sha256",
+                release.download_url
+            )),
+            ..Reply::body(vec![])
+        },
+        Reply {
+            status: 302,
+            location: Some("https://evil.example/checksum".into()),
+            ..Reply::body(vec![])
+        },
+    ] {
+        let metadata = with_checksum(&release, &body);
+        let server = Server::new(vec![
+            Reply::body(serde_json::to_vec(&json!([metadata])).unwrap()),
+            reply,
+        ]);
+        assert!(
+            server
+                .client(&temp)
+                .check(CancellationToken::new())
+                .await
+                .is_err()
+        );
+        assert_eq!(server.count(), 2);
+    }
+    let metadata = with_checksum(&release, &body);
+    let server = Server::new(vec![
+        Reply::body(serde_json::to_vec(&json!([metadata])).unwrap()),
+        Reply {
+            delay: Duration::from_millis(150),
+            ..Reply::body(body)
+        },
+    ]);
+    let token = CancellationToken::new();
+    let abort = token.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        abort.cancel();
+    });
+    assert!(
+        server
+            .client(&temp)
+            .check(token)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("取消")
+    );
+    assert_eq!(server.count(), 2);
+    assert_eq!(fs::read_dir(&temp.0).unwrap().count(), 0);
+}
 #[tokio::test]
 async fn verified_download_reports_progress_and_owns_cleanup() {
     let temp = Temp::new();
-    let bytes = executable(next_preview_version(), PRODUCT, false);
-    let release = release(next_preview_version(), &bytes);
+    let bytes = executable(next_release_version(), PRODUCT, false);
+    let release = release(next_release_version(), &bytes);
     let server = Server::new(vec![Reply::body(bytes.clone())]);
     let c = server.client(&temp);
     let values = Arc::new(Mutex::new(Vec::new()));
@@ -432,8 +676,8 @@ async fn verified_download_reports_progress_and_owns_cleanup() {
 #[tokio::test]
 async fn bad_proxy_bytes_fall_back_once_and_failures_leave_no_payload() {
     let temp = Temp::new();
-    let bytes = executable(next_preview_version(), PRODUCT, false);
-    let release = release(next_preview_version(), &bytes);
+    let bytes = executable(next_release_version(), PRODUCT, false);
+    let release = release(next_release_version(), &bytes);
     let mut corrupt = bytes.clone();
     corrupt[0] = 0;
     let server = Server::new(vec![
@@ -444,39 +688,45 @@ async fn bad_proxy_bytes_fall_back_once_and_failures_leave_no_payload() {
         .client(&temp)
         .download(&release, None, CancellationToken::new())
         .await
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e:#}; requests={:?}", server.requests.lock().unwrap()));
     assert_eq!(server.count(), 2);
     drop(d);
     assert_eq!(fs::read_dir(&temp.0).unwrap().count(), 0);
     for body in [
         corrupt,
-        executable(next_preview_version(), PRODUCT, true),
-        executable(next_preview_version(), "LiteTicker", false),
+        executable(next_release_version(), PRODUCT, true),
+        executable(next_release_version(), "LiteTicker Preview", false),
     ] {
-        let expected = super::parse_release(&metadata(&Release {
-            version: next_preview_version().into(),
-            sha256: hex(&Sha256::digest(&body)),
-            size: body.len() as u64,
-            ..release.clone()
-        }))
+        let expected = super::parse_release(
+            &metadata(&Release {
+                version: next_release_version().into(),
+                sha256: hex(&Sha256::digest(&body)),
+                size: body.len() as u64,
+                ..release.clone()
+            }),
+            None,
+        )
         .unwrap();
         let server = Server::new(vec![Reply::body(body.clone()), Reply::body(body)]);
-        assert!(
-            server
-                .client(&temp)
-                .download(&expected, None, CancellationToken::new())
-                .await
-                .is_err()
+        let result = server
+            .client(&temp)
+            .download(&expected, None, CancellationToken::new())
+            .await;
+        assert!(result.is_err());
+        assert_eq!(
+            server.count(),
+            2,
+            "result={result:?}; requests={:?}",
+            server.requests.lock().unwrap()
         );
-        assert_eq!(server.count(), 2);
         assert_eq!(fs::read_dir(&temp.0).unwrap().count(), 0);
     }
 }
 #[tokio::test]
 async fn cancellation_in_request_or_after_success_progress_never_returns_payload() {
     let temp = Temp::new();
-    let bytes = executable(next_preview_version(), PRODUCT, false);
-    let release = release(next_preview_version(), &bytes);
+    let bytes = executable(next_release_version(), PRODUCT, false);
+    let release = release(next_release_version(), &bytes);
     let server = Server::new(vec![Reply {
         delay: Duration::from_millis(150),
         ..Reply::body(bytes.clone())
@@ -517,7 +767,7 @@ async fn cancellation_in_request_or_after_success_progress_never_returns_payload
 }
 fn plan(temp: &Temp) -> Plan {
     let old = executable(crate::VERSION, PRODUCT, false);
-    let new = executable(next_preview_version(), PRODUCT, false);
+    let new = executable(next_release_version(), PRODUCT, false);
     let target = temp.0.join(ASSET);
     let payload = temp.0.join("payload.exe");
     fs::write(&target, &old).unwrap();
@@ -525,7 +775,7 @@ fn plan(temp: &Temp) -> Plan {
     Plan {
         target,
         payload,
-        version: next_preview_version().into(),
+        version: next_release_version().into(),
         sha256: hex(&Sha256::digest(new)),
         size: fs::metadata(temp.0.join("payload.exe")).unwrap().len(),
         original_sha256: hex(&Sha256::digest(old)),
@@ -623,8 +873,8 @@ async fn deadlines_and_check_cancellation_are_explicit() {
 #[tokio::test]
 async fn unsafe_redirects_are_rejected_before_following_and_official_fallback_is_bounded() {
     let temp = Temp::new();
-    let bytes = executable(next_preview_version(), PRODUCT, false);
-    let release = release(next_preview_version(), &bytes);
+    let bytes = executable(next_release_version(), PRODUCT, false);
+    let release = release(next_release_version(), &bytes);
     let server = Server::new(vec![
         Reply {
             status: 302,
@@ -660,7 +910,7 @@ async fn unsafe_redirects_are_rejected_before_following_and_official_fallback_is
 }
 #[test]
 fn identity_checks_file_version_original_filename_and_handoff_arguments() {
-    let bytes = executable(next_preview_version(), PRODUCT, false);
+    let bytes = executable(next_release_version(), PRODUCT, false);
     let signature = 0xFEEF04BD_u32.to_le_bytes();
     let index = bytes.windows(4).position(|s| s == signature).unwrap();
     let mut wrong = bytes.clone();
@@ -683,17 +933,17 @@ fn identity_checks_file_version_original_filename_and_handoff_arguments() {
     assert_eq!(fs::read(unrelated).unwrap(), b"keep");
 }
 #[test]
-#[ignore = "requires an explicitly supplied, separately built native preview EXE; never launches it"]
-fn actual_native_preview_identity() {
+#[ignore = "requires an explicitly supplied, separately built native stable EXE; never launches it"]
+fn actual_native_stable_identity() {
     let path = PathBuf::from(
         std::env::var_os("LITETICKER_NATIVE_PROBE")
-            .expect("set LITETICKER_NATIVE_PROBE to an owned native preview artifact"),
+            .expect("set LITETICKER_NATIVE_PROBE to an owned native stable artifact"),
     );
     let bytes = read_file_bounded(&path, LIMIT).unwrap();
     let identity = native_identity(&bytes).unwrap();
     assert_eq!(identity.version, version(crate::VERSION).unwrap());
     println!(
-        "native preview identity OK; bytes={}; sha256={}",
+        "native stable identity OK; bytes={}; sha256={}",
         bytes.len(),
         hex(&Sha256::digest(&bytes))
     );

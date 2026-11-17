@@ -1,4 +1,4 @@
-//! The native preview has its own release tags, asset identity, and updater entry point.
+//! Verified native updates from the official v2.0.0+ stable release channel.
 use anyhow::{Context, Result, bail, ensure};
 use regex::Regex;
 use reqwest::{Client, Response, Url, redirect::Policy};
@@ -23,8 +23,9 @@ use tokio_util::sync::CancellationToken;
 
 // shortcut: inspect the latest 30 releases; use a dedicated manifest if this channel outgrows that window.
 const API: &str = "https://api.github.com/repos/Alexzzz2008/LiteTicker/releases?per_page=30";
-const ASSET: &str = "LiteTicker-preview.exe";
-const PRODUCT: &str = "LiteTicker Preview";
+const ASSET: &str = "LiteTicker.exe";
+const CHECKSUM_ASSET: &str = "LiteTicker.exe.sha256";
+const PRODUCT: &str = "LiteTicker";
 const LIMIT: u64 = 20 * 1024 * 1024;
 const METADATA_LIMIT: usize = 1024 * 1024;
 const HELPER_ARG: &str = "--apply-native-update";
@@ -34,7 +35,7 @@ pub type Progress = Arc<dyn Fn(u8) + Send + Sync>;
 pub struct ChannelUnavailable;
 impl fmt::Display for ChannelUnavailable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("尚未发布独立原生预览更新，当前预览可继续使用；不会接收 .NET 正式版更新。")
+        f.write_str("尚未发布可用的 v2.0.0+ 正式更新，当前版本可继续使用。")
     }
 }
 impl std::error::Error for ChannelUnavailable {}
@@ -59,7 +60,7 @@ impl UpdateClient {
     pub fn new() -> Result<Self> {
         Ok(Self {
             http: Client::builder()
-                .user_agent(concat!("LiteTicker-preview/", env!("CARGO_PKG_VERSION")))
+                .user_agent(concat!("LiteTicker/", env!("CARGO_PKG_VERSION")))
                 .redirect(Policy::none())
                 .min_tls_version(reqwest::tls::Version::TLS_1_2)
                 .build()?,
@@ -79,41 +80,40 @@ impl UpdateClient {
             let response = response.error_for_status()?;
             let bytes = read_bounded(response, METADATA_LIMIT).await?;
             let releases: serde_json::Value =
-                serde_json::from_slice(&bytes).context("原生预览版本信息不是有效JSON")?;
+                serde_json::from_slice(&bytes).context("正式版版本信息不是有效JSON")?;
             let mut latest = None;
-            for value in releases.as_array().context("原生预览版本列表格式无效")? {
+            for value in releases.as_array().context("正式版版本列表格式无效")? {
                 let Some(tag) = value["tag_name"].as_str() else {
                     bail!("版本标签字段缺失");
                 };
-                if !tag.starts_with("native-v") {
+                let Some(name) = tag.strip_prefix('v') else {
                     continue;
-                }
+                };
+                let Ok(candidate_version) = version(name) else {
+                    continue;
+                };
                 let draft = value["draft"].as_bool().context("版本draft标记无效")?;
                 let prerelease = value["prerelease"]
                     .as_bool()
                     .context("版本prerelease标记无效")?;
-                if draft || !prerelease {
+                if draft || prerelease {
                     continue;
                 }
-                let release = parse_release(value)?;
-                if latest.as_ref().is_none_or(|old: &Release| {
-                    version(&release.version).unwrap() > version(&old.version).unwrap()
-                }) {
-                    latest = Some(release);
+                if latest
+                    .as_ref()
+                    .is_none_or(|(old, _)| candidate_version > *old)
+                {
+                    latest = Some((candidate_version, value));
                 }
             }
-            let Some(release) = latest else {
+            let Some((_, metadata)) = latest else {
                 return Err(ChannelUnavailable.into());
             };
+            let checksum = self.checksum_if_needed(metadata).await?;
+            let release = parse_release(metadata, checksum.as_deref())?;
             Ok((version(&release.version)? > version(crate::VERSION)?).then_some(release))
         };
-        bounded(
-            &token,
-            Duration::from_secs(10),
-            "检查原生预览更新超时",
-            work,
-        )
-        .await
+        bounded(&token, Duration::from_secs(10), "检查正式版更新超时", work).await
     }
     pub async fn download(
         &self,
@@ -124,7 +124,7 @@ impl UpdateClient {
         validate_release(release)?;
         ensure!(
             version(&release.version)? > version(crate::VERSION)?,
-            "更新版本必须高于当前原生预览"
+            "更新版本必须高于当前正式版"
         );
         cancel(&token)?;
         let work = async {
@@ -141,13 +141,7 @@ impl UpdateClient {
             self.download_attempt(&release.download_url, release, progress.as_ref(), &token)
                 .await
         };
-        bounded(
-            &token,
-            Duration::from_secs(120),
-            "下载原生预览更新超时",
-            work,
-        )
-        .await
+        bounded(&token, Duration::from_secs(120), "下载正式版更新超时", work).await
     }
     async fn request(&self, url: &str, accept: &str) -> Result<Response> {
         #[cfg(test)]
@@ -169,10 +163,45 @@ impl UpdateClient {
             .send()
             .await?)
     }
-    async fn open_download(&self, initial: &Url, release: &Release) -> Result<Response> {
+    async fn checksum_if_needed(&self, metadata: &serde_json::Value) -> Result<Option<String>> {
+        let executable = selected_asset(metadata, ASSET)?;
+        if !executable["digest"].is_null() {
+            github_digest(&executable["digest"])?;
+            return Ok(None);
+        }
+        let sidecar = selected_asset(metadata, CHECKSUM_ASSET)?;
+        let size = sidecar["size"].as_u64().context("校验文件大小无效")?;
+        ensure!((64..=256).contains(&size), "校验文件大小超出上限");
+        let tag = metadata["tag_name"].as_str().context("版本标签缺失")?;
+        version(tag.strip_prefix('v').context("不是正式发行标签")?)?;
+        let url = Url::parse(
+            sidecar["browser_download_url"]
+                .as_str()
+                .context("缺少官方校验文件地址")?,
+        )?;
+        validate_https(&url)?;
+        ensure!(
+            url.host_str() == Some("github.com")
+                && url.query().is_none()
+                && url.path()
+                    == format!("/Alexzzz2008/LiteTicker/releases/download/{tag}/{CHECKSUM_ASSET}"),
+            "校验文件不属于同一官方正式发行"
+        );
+        // The authority for a missing API digest must never come from the download proxy.
+        let response = self.open_asset(&url, &url, false).await?;
+        let body = read_bounded(response, 256).await?;
+        ensure!(body.len() as u64 == size, "官方校验文件大小不匹配");
+        Ok(Some(checksum_file(&body)?))
+    }
+    async fn open_asset(
+        &self,
+        initial: &Url,
+        official: &Url,
+        allow_proxy: bool,
+    ) -> Result<Response> {
         let mut url = initial.clone();
         for redirects in 0..=3 {
-            validate_hop(&url, release)?;
+            validate_hop(&url, official, allow_proxy)?;
             let response = self
                 .request(url.as_str(), "application/octet-stream")
                 .await?;
@@ -184,7 +213,7 @@ impl UpdateClient {
                     .context("更新重定向缺少地址")?
                     .to_str()?;
                 url = url.join(location)?;
-                validate_hop(&url, release)?;
+                validate_hop(&url, official, allow_proxy)?;
             } else {
                 return Ok(response.error_for_status()?);
             }
@@ -198,7 +227,7 @@ impl UpdateClient {
         progress: Option<&Progress>,
         token: &CancellationToken,
     ) -> Result<DownloadedUpdate> {
-        let mut response = self.open_download(url, release).await?;
+        let mut response = self.open_asset(url, &release.download_url, true).await?;
         if let Some(length) = response.content_length() {
             ensure!(length == release.size, "更新下载大小与官方资产不一致");
         }
@@ -293,14 +322,14 @@ impl OwnedDirectory {
             let ticks = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
                 ^ ((std::process::id() as u128) << 64)
                 ^ NEXT.fetch_add(1, Ordering::Relaxed) as u128;
-            let path = root.join(format!("LiteTicker-preview-update-{ticks:032x}"));
+            let path = root.join(format!("LiteTicker-native-update-{ticks:032x}"));
             match fs::create_dir(&path) {
                 Ok(()) => return Ok(Self { path, keep: false }),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(e) => return Err(e.into()),
             }
         }
-        bail!("无法创建原生预览更新暂存目录")
+        bail!("无法创建正式版更新暂存目录")
     }
 }
 impl Drop for OwnedDirectory {
@@ -354,27 +383,23 @@ fn hash_file(path: &Path) -> Result<String> {
     Ok(hex(&sha.finalize()))
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
-struct PreviewVersion(u16, u16, u16, u32);
-fn version(value: &str) -> Result<PreviewVersion> {
+struct ReleaseVersion(u16, u16, u16);
+fn version(value: &str) -> Result<ReleaseVersion> {
     static RE: OnceLock<Regex> = OnceLock::new();
     let capture = RE
-        .get_or_init(|| {
-            Regex::new(
-                r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-preview\.([1-9][0-9]*)$",
-            )
-            .unwrap()
-        })
+        .get_or_init(|| Regex::new(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$").unwrap())
         .captures(value)
-        .context("原生预览版本必须为1.0.6-preview.1形式")?;
-    Ok(PreviewVersion(
+        .context("正式版本必须是三段版本号，例如2.0.0")?;
+    let parsed = ReleaseVersion(
         capture[1].parse()?,
         capture[2].parse()?,
         capture[3].parse()?,
-        capture[4].parse()?,
-    ))
+    );
+    ensure!(parsed.0 >= 2, "正式原生更新仅接受v2.0.0及以后版本");
+    Ok(parsed)
 }
 fn release_tag(release: &Release) -> String {
-    format!("native-v{}", release.version)
+    format!("v{}", release.version)
 }
 fn validate_https(url: &Url) -> Result<()> {
     ensure!(
@@ -407,19 +432,19 @@ fn validate_release(release: &Release) -> Result<()> {
             url.host_str() == Some("github.com")
                 && url.query().is_none()
                 && url.path() == format!("/Alexzzz2008/LiteTicker/releases/{suffix}"),
-            "更新地址不属于独立原生预览资产"
+            "更新地址不属于正式版资产"
         );
     }
     Ok(())
 }
-fn validate_hop(url: &Url, release: &Release) -> Result<()> {
+fn validate_hop(url: &Url, official: &Url, allow_proxy: bool) -> Result<()> {
     validate_https(url)?;
     match url.host_str() {
         Some("gh-proxy.com") => ensure!(
-            url.as_str() == format!("https://gh-proxy.com/{}", release.download_url),
+            allow_proxy && url.as_str() == format!("https://gh-proxy.com/{official}"),
             "更新代理地址不属于固定官方资产"
         ),
-        Some("github.com") => ensure!(*url == release.download_url, "更新重定向改变了官方资产"),
+        Some("github.com") => ensure!(url == official, "更新重定向改变了官方资产"),
         Some(
             "release-assets.githubusercontent.com"
             | "objects.githubusercontent.com"
@@ -429,28 +454,62 @@ fn validate_hop(url: &Url, release: &Release) -> Result<()> {
     };
     Ok(())
 }
-fn parse_release(value: &serde_json::Value) -> Result<Release> {
-    let tag = value["tag_name"].as_str().context("版本标签缺失")?;
-    let name = tag
-        .strip_prefix("native-v")
-        .context("不是独立原生预览标签")?;
-    version(name)?;
-    ensure!(
-        value["draft"] == false && value["prerelease"] == true,
-        "原生预览必须是非草稿预发行版本"
-    );
-    let assets = value["assets"].as_array().context("缺少原生预览资产")?;
+fn selected_asset<'a>(
+    metadata: &'a serde_json::Value,
+    name: &str,
+) -> Result<&'a serde_json::Value> {
+    let assets = metadata["assets"]
+        .as_array()
+        .context("版本信息缺少发布资产")?;
     let matches = assets
         .iter()
-        .filter(|a| a["name"] == ASSET)
+        .filter(|a| a["name"] == name)
         .collect::<Vec<_>>();
-    ensure!(matches.len() == 1, "原生预览资产缺失或重复");
-    let asset = matches[0];
-    ensure!(asset["state"] == "uploaded", "原生预览资产尚未上传完成");
-    let digest = asset["digest"]
+    ensure!(matches.len() == 1, "发布资产{name}缺失或重复");
+    ensure!(
+        matches[0]["state"] == "uploaded",
+        "发布资产{name}尚未上传完成"
+    );
+    Ok(matches[0])
+}
+fn github_digest(value: &serde_json::Value) -> Result<String> {
+    let hash = value
         .as_str()
         .and_then(|s| s.strip_prefix("sha256:"))
-        .context("官方资产缺少SHA256摘要")?;
+        .context("官方资产缺少有效SHA256摘要")?;
+    ensure!(
+        hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()),
+        "官方资产SHA256摘要格式无效"
+    );
+    Ok(hash.to_ascii_lowercase())
+}
+fn checksum_file(body: &[u8]) -> Result<String> {
+    let text = std::str::from_utf8(body).context("校验文件编码无效")?;
+    static CHECKSUM: OnceLock<Regex> = OnceLock::new();
+    let captures = CHECKSUM
+        .get_or_init(|| {
+            Regex::new(r"\A([0-9a-fA-F]{64})(?:[ \t]+\*?LiteTicker\.exe)?(?:\r?\n)?\z").unwrap()
+        })
+        .captures(text)
+        .context("校验文件必须为单条LiteTicker.exe SHA256")?;
+    Ok(captures[1].to_ascii_lowercase())
+}
+fn parse_release(value: &serde_json::Value, checksum: Option<&str>) -> Result<Release> {
+    let tag = value["tag_name"].as_str().context("版本标签缺失")?;
+    let name = tag.strip_prefix('v').context("不是正式发行标签")?;
+    version(name)?;
+    ensure!(
+        value["draft"] == false && value["prerelease"] == false,
+        "正式更新不能使用草稿或预发行版本"
+    );
+    let asset = selected_asset(value, ASSET)?;
+    let digest = if asset["digest"].is_null() {
+        checksum
+            .context("官方资产缺少SHA256摘要与校验文件")?
+            .to_owned()
+    } else {
+        github_digest(&asset["digest"])?
+    };
     let release = Release {
         version: name.into(),
         download_url: Url::parse(
@@ -473,7 +532,7 @@ fn parse_release(value: &serde_json::Value) -> Result<Release> {
 
 #[derive(Debug)]
 struct NativeIdentity {
-    version: PreviewVersion,
+    version: ReleaseVersion,
 }
 fn verify_candidate(path: &Path, release: &Release) -> Result<NativeIdentity> {
     validate_release(release)?;
@@ -544,7 +603,7 @@ fn native_identity(data: &[u8]) -> Result<NativeIdentity> {
     ensure!(u32_at(data, optional + 108)? >= 16, "PE数据目录不完整");
     ensure!(
         u32_at(data, optional + 224)? == 0 && u32_at(data, optional + 228)? == 0,
-        "拒绝.NET托管程序集，原生预览不能接收正式版更新"
+        "拒绝.NET托管程序集；更新只接受原生Windows EXE"
     );
     let sections = optional + optional_size;
     bytes(data, sections, count * 40)?;
@@ -608,16 +667,16 @@ fn native_identity(data: &[u8]) -> Result<NativeIdentity> {
     let fixed = fixed.context("缺少固定FileVersion")?;
     ensure!(
         strings.get("ProductName").map(String::as_str) == Some(PRODUCT),
-        "更新产品不是独立原生预览"
+        "更新产品不是正式版"
     );
     ensure!(
         strings.get("OriginalFilename").map(String::as_str) == Some(ASSET),
-        "更新原始文件名不是原生预览资产"
+        "更新原始文件名不是正式版资产"
     );
     let version = version(
         strings
             .get("ProductVersion")
-            .context("缺少原生预览ProductVersion")?,
+            .context("缺少正式版ProductVersion")?,
     )?;
     ensure!(
         fixed == [version.0, version.1, version.2, 0],
@@ -702,7 +761,7 @@ struct Plan {
     wait_ms: u32,
 }
 fn plan_release(plan: &Plan) -> Result<Release> {
-    let tag = format!("native-v{}", plan.version);
+    let tag = format!("v{}", plan.version);
     Ok(Release {
         version: plan.version.clone(),
         sha256: plan.sha256.clone(),
@@ -721,7 +780,7 @@ pub fn launch_update(download: DownloadedUpdate) -> Result<()> {
     #[cfg(not(windows))]
     {
         let _ = download;
-        bail!("原生预览自动替换仅支持Windows");
+        bail!("正式版自动替换仅支持Windows");
     }
     #[cfg(windows)]
     {
@@ -729,7 +788,7 @@ pub fn launch_update(download: DownloadedUpdate) -> Result<()> {
         let original = native_identity(&fs::read(&target)?)?;
         ensure!(
             original.version == version(crate::VERSION)?,
-            "当前运行程序的预览身份或版本不匹配"
+            "当前运行程序的正式版身份或版本不匹配"
         );
         verify_candidate(&download.path(), download.release())?;
         ensure!(
@@ -790,17 +849,17 @@ pub fn run_helper_if_requested() -> Option<i32> {
     Some(match run_helper(&args) {
         Ok(()) => 0,
         Err(error) => {
-            eprintln!("原生预览更新未完成：{error:#}");
+            eprintln!("正式版更新未完成：{error:#}");
             #[cfg(windows)]
             {
                 use windows_sys::Win32::UI::WindowsAndMessaging::{
                     MB_ICONERROR, MB_OK, MessageBoxW,
                 };
-                let text = format!("原生预览更新未完成：{error:#}")
+                let text = format!("正式版更新未完成：{error:#}")
                     .encode_utf16()
                     .chain(Some(0))
                     .collect::<Vec<_>>();
-                let title = "轻盘原生预览更新"
+                let title = "轻盘正式版更新"
                     .encode_utf16()
                     .chain(Some(0))
                     .collect::<Vec<_>>();
@@ -848,7 +907,7 @@ fn run_helper(args: &[std::ffi::OsString]) -> Result<()> {
     verify_old(&executable, &plan)?;
     let outcome = apply_plan(&plan, wait_for_parent, start_process);
     let message = match &outcome {
-        Ok(()) => "更新完成，已启动原生预览新版。".into(),
+        Ok(()) => "更新完成，已启动正式版新版。".into(),
         Err(error) => format!("更新未完成：{error:#}"),
     };
     let _ = fs::write(directory.join("result.txt"), message);
@@ -860,7 +919,7 @@ fn owned_container(directory: &Path) -> bool {
     let Some(name) = directory.file_name().and_then(|s| s.to_str()) else {
         return false;
     };
-    let Some(id) = name.strip_prefix("LiteTicker-preview-update-") else {
+    let Some(id) = name.strip_prefix("LiteTicker-native-update-") else {
         return false;
     };
     id.len() == 32
@@ -878,7 +937,7 @@ fn verify_old(path: &Path, plan: &Plan) -> Result<()> {
     let old = native_identity(&data)?;
     ensure!(
         old.version == version(&plan.original_version)? && old.version == version(crate::VERSION)?,
-        "原程序预览身份或版本不匹配"
+        "原程序正式版身份或版本不匹配"
     );
     Ok(())
 }
@@ -914,13 +973,13 @@ fn apply_plan(
     verify_candidate(&plan.payload, &release)?;
     ensure!(
         version(&plan.version)? > version(&plan.original_version)?,
-        "更新版本必须高于当前预览"
+        "更新版本必须高于当前版本"
     );
     wait(plan)?;
     verify_old(&plan.target, plan)?;
     let parent = plan.target.parent().context("更新目标目录无效")?;
     let unique = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let candidate = parent.join(format!(".LiteTicker-preview-{unique:032x}.new"));
+    let candidate = parent.join(format!(".LiteTicker-native-{unique:032x}.new"));
     let backup = plan.target.with_file_name(format!(
         "{}.previous",
         plan.target.file_name().unwrap().to_string_lossy()
@@ -941,7 +1000,7 @@ fn apply_plan(
         if replaced || (!plan.target.exists() && backup.exists()) {
             let restored = (|| -> Result<()> {
                 verify_old(&backup, plan)?;
-                let rejected = parent.join(format!(".LiteTicker-preview-{unique:032x}.rejected"));
+                let rejected = parent.join(format!(".LiteTicker-native-{unique:032x}.rejected"));
                 if plan.target.exists() {
                     retry(|| atomic_replace(&backup, &plan.target, &rejected))?;
                 } else {
@@ -992,7 +1051,7 @@ fn start_process(path: &Path) -> Result<()> {
     let until = std::time::Instant::now() + Duration::from_millis(1500);
     while std::time::Instant::now() < until {
         if let Some(status) = child.try_wait()? {
-            ensure!(status.success(), "原生预览启动时异常退出");
+            ensure!(status.success(), "正式版启动时异常退出");
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(25));
@@ -1127,7 +1186,7 @@ impl UpdateLock {
             ) -> windows_sys::Win32::Foundation::HANDLE;
         }
         let name = format!(
-            "Local\\LiteTicker.Preview.Update.{}",
+            "Local\\LiteTicker.Native.Update.{}",
             hex(&Sha256::digest(
                 target.to_string_lossy().to_uppercase().as_bytes()
             ))
@@ -1140,7 +1199,7 @@ impl UpdateLock {
             unsafe {
                 CloseHandle(handle);
             }
-            bail!("另一原生预览更新正在处理此文件");
+            bail!("另一正式版更新正在处理此文件");
         }
         Ok(Self(handle))
     }

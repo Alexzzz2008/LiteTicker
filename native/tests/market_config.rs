@@ -273,25 +273,25 @@ fn shortcut_disabled_duplicate_and_invalid_values_match_existing_contract() {
 }
 
 #[test]
-fn first_preview_copies_installed_settings_once_and_keeps_stores_independent() {
+fn stable_uses_existing_settings_and_imports_a_preview_only_on_first_run() {
     let tmp = Temporary::new();
     let installed = SettingsStore::new(tmp.0.join("stable"));
     let preview = SettingsStore::new(tmp.0.join("preview"));
     assert_eq!(
-        preview.load_preview(&installed).unwrap().symbols,
+        installed.load_or_import_preview(&preview).unwrap().symbols,
         AppSettings::default().symbols
     );
-    assert!(!installed.file_path().exists());
+    assert!(!preview.file_path().exists());
     let mut settings = AppSettings {
         x: -200,
         symbols: vec!["600519.SH".into()],
         ..Default::default()
     };
-    installed.save(&settings).unwrap();
-    let before = fs::read(installed.file_path()).unwrap();
-    assert_eq!(preview.load_preview(&installed).unwrap().x, -200);
-    settings.x = 123;
     preview.save(&settings).unwrap();
-    assert_eq!(preview.load_preview(&installed).unwrap().x, 123);
-    assert_eq!(fs::read(installed.file_path()).unwrap(), before);
+    let before = fs::read(preview.file_path()).unwrap();
+    assert_eq!(installed.load_or_import_preview(&preview).unwrap().x, -200);
+    settings.x = 123;
+    installed.save(&settings).unwrap();
+    assert_eq!(installed.load_or_import_preview(&preview).unwrap().x, 123);
+    assert_eq!(fs::read(preview.file_path()).unwrap(), before);
 }
