@@ -4,11 +4,44 @@
 
 轻盘是独立的 **Windows x64 原生桌面程序**，使用 **Rust + Slint**，默认采用软件渲染。下载后即可运行，无需安装 .NET、Python、浏览器内核或 Rust 开发环境。图标采用深红底色的“轻”字。
 
-当前正式版：**[v2.0.0](https://github.com/Alexzzz2008/LiteTicker/releases/tag/v2.0.0)** · Windows x64 · Rust + Slint
+本页说明适用于 **v2.0.0 及更新的 Windows x64 原生版**。正式程序从本仓库的 [官方最新发布页](https://github.com/Alexzzz2008/LiteTicker/releases/latest) 下载；下载前先确认页面标签为 **v2.0.0 或更高版本**。
 
-推荐下载 [LiteTicker-win.zip](https://github.com/Alexzzz2008/LiteTicker/releases/download/v2.0.0/LiteTicker-win.zip)，完整解压后运行 `install.cmd`；也可直接运行包内的 `LiteTicker.exe`，或下载 [单文件程序](https://github.com/Alexzzz2008/LiteTicker/releases/download/v2.0.0/LiteTicker.exe)。
+## 下载与使用
 
-代理加速：[安装包](https://gh-proxy.com/https://github.com/Alexzzz2008/LiteTicker/releases/download/v2.0.0/LiteTicker-win.zip) · [单文件程序](https://gh-proxy.com/https://github.com/Alexzzz2008/LiteTicker/releases/download/v2.0.0/LiteTicker.exe)。
+### 首次安装（推荐）
+
+1. 打开 [官方最新发布页](https://github.com/Alexzzz2008/LiteTicker/releases/latest)，在 **Assets（发布资产）** 中下载 `LiteTicker-win.zip`。
+2. 右键 ZIP，选择 **全部解压**。不要直接在压缩包内运行安装入口；解压后让 `LiteTicker.exe`、`LiteTicker.exe.sha256`、`install.ps1`、`install.cmd` 保持在同一文件夹。
+3. 双击解压目录中的 **`install.cmd`**。安装器会校验并复制程序、创建桌面快捷方式，然后自动启动轻盘。
+4. 以后双击桌面的 **“轻盘 · 桌面看盘助手”** 快捷方式启动。默认安装目录是 `%LOCALAPPDATA%\Programs\LiteTicker`；如果已有 `D:\LiteTicker\LiteTicker.exe`，则继续安装到 `D:\LiteTicker`。
+
+无需安装 .NET Framework、VC++ 运行库或 Rust。请下载发布资产，不要把 GitHub 的 **Source code** 或 **Code → Download ZIP** 源码压缩包当作安装包。
+
+### 免安装运行
+
+在同一个发布页下载 **`LiteTicker.exe`**，放到准备长期保留的文件夹，直接双击运行；也可以完整解压 `LiteTicker-win.zip` 后直接运行其中的 EXE。此方式不会自动创建桌面快捷方式，以后仍从该文件夹启动。
+
+官方最新版直链：[安装包](https://github.com/Alexzzz2008/LiteTicker/releases/latest/download/LiteTicker-win.zip) · [单文件程序](https://github.com/Alexzzz2008/LiteTicker/releases/latest/download/LiteTicker.exe)。下载缓慢时可使用代理：[安装包加速](https://gh-proxy.com/https://github.com/Alexzzz2008/LiteTicker/releases/latest/download/LiteTicker-win.zip) · [单文件加速](https://gh-proxy.com/https://github.com/Alexzzz2008/LiteTicker/releases/latest/download/LiteTicker.exe)；版本号和校验文件仍以官方发布页为准。
+
+### 从 v1.0.5 升级
+
+1. 在 Windows 任务栏右侧找到旧版轻盘托盘图标，右键选择 **“退出轻盘”**。关闭窗口或按 `Alt+F4` 只是隐藏，不能代替退出。
+2. 下载原生版的 `LiteTicker-win.zip`，完整解压后双击 **`install.cmd`**。这次跨技术栈升级需要手动安装，v1.0.5 内的“下载并重启”不能安装原生程序。
+3. 原先装在 `D:\LiteTicker` 的程序会在原位置升级；其他自定义目录需要在解压目录打开终端，指定原路径，例如：
+
+   ```powershell
+   .\install.cmd -InstallDir "C:\Apps\LiteTicker"
+   ```
+
+4. 安装器保留被替换的旧 EXE 备份，不删除自选股或设置。新版直接沿用当前用户的 `%LOCALAPPDATA%\LiteTicker\settings.json`，无需重新添加自选。
+
+### 启动、隐藏、退出与版本确认
+
+- **启动：**安装版使用桌面快捷方式；免安装版双击自己保存的 `LiteTicker.exe`。再次启动会唤回已有窗口。
+- **隐藏：**行情窗右键选 **“隐藏到托盘”**，或关闭窗口、按 `Alt+F4`。隐藏后暂停行情请求，程序仍在运行。
+- **重新显示：**双击任务栏右侧的轻盘托盘图标，或在托盘菜单选 **“显示 / 隐藏”**；默认 `Ctrl+Alt+Q` 也可显示／隐藏。托盘图标可能收在任务栏的 **^（显示隐藏的图标）** 中。
+- **完全退出：**托盘右键选 **“退出轻盘”**，或行情窗右键选 **“退出”**。升级或移动 EXE 前先完全退出。
+- **确认版本：**行情窗右键选 **“设置”**，或托盘选 **“设置 / 快捷键”**，进入 **“版本与更新”**，查看 **“当前版本”**。本次升级完成后应显示 **v2.0.0**；以后以下载发布页的版本号为准。
 
 ## 体积与内存
 
@@ -64,22 +97,18 @@
 
 交易时段刷新间隔可选 1、2、3、5、10 秒，其他时间降为 30 秒。交易时段按北京时间和周末判断，暂不内置法定节假日日历。刷新间隔不等于行情接口的数据更新频率。
 
-## 使用
+## 日常操作
 
-- 从 [最新版本](https://github.com/Alexzzz2008/LiteTicker/releases/latest) 下载 `LiteTicker-win.zip`，完整解压后运行 `install.cmd`，或直接使用单个 `LiteTicker.exe`。2.0.0 为 Windows x64 原生程序，无需 .NET 运行库。
-- **从 v1.0.5 升级：**旧版内置更新器仅支持 .NET 程序，不能自动完成这次跨技术栈升级。先在旧版托盘菜单选择 **退出**，再运行 2.0.0 的 `install.cmd`，或将新的 `LiteTicker.exe` 手动替换到原安装目录。自选股和设置直接沿用原正式配置，无需重新添加。
 - 左键拖动小窗，拖动边缘缩放；右键股票行可删除、上移或下移自选，右键菜单也提供添加自选和设置入口。
 - 悬停显示盘口，移出后自动隐藏；点击“固定”保持显示，点击“关闭”停止详情请求。选中股票后按 `Enter` 也可打开并固定盘口。
-- 双击托盘图标显示窗口。托盘菜单提供显示／隐藏、设置、添加自选、更新行情和退出。
-- 关闭窗口或按 `Alt+F4` 会隐藏到托盘；只有选择托盘菜单中的 **退出** 才会结束程序。
-- 默认全局快捷键：`Ctrl+Alt+Q` 显示／隐藏，`Ctrl+Alt+R` 更新行情。
+- 默认 `Ctrl+Alt+R` 更新行情；行情窗右键和托盘菜单也有“更新行情”入口。
 - 可在设置中录入其他快捷键，支持 `Ctrl+Q`、`Alt+R` 等两键组合，按 `Delete` 或 `Backspace` 禁用对应快捷键。快捷键被其他程序占用时提示冲突，不保存这次设置。
 - 设置中的“窗口透明度（%）”保存后立即生效，范围为 60–100；100 表示完全不透明，数值越小越透明。
 - “分笔更新（秒）”可选 2 或 3，独立于主窗行情间隔；仅盘口打开时请求，非交易时段降为 30 秒。
 - “字体大小”中设置全局字号；列表、盘口选择“跟随全局”或单独比例。其他界面按全局字号显示。
 - “版本与更新”中可关闭启动检查，或手动检查、下载并重启。检查失败不会影响行情；关闭设置会取消正在进行的更新请求。
 
-隐藏小窗会取消正在进行的请求并暂停刷新；重新显示后立即请求新行情。
+重新显示小窗后立即请求新行情。
 
 详情仅在打开时请求。分时缓存 5 秒、日 K 缓存 60 秒；切换股票或数据源会取消旧请求，迟到结果不会重新打开已关闭的盘口。腾讯五档直接复用批量报价，近期分笔按页表定位最新页，每轮最多两次请求，共用 4 秒超时，失败不会退回早盘页。无分笔而有分时数据时，成交区明确显示“分钟成交 · 非逐笔”。当前东财适配未提供五档；详情接口失败会提示并标记保留数据，不切换其他来源冒充数据。
 
