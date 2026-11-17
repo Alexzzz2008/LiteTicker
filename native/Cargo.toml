@@ -1,0 +1,51 @@
+[package]
+name = "liteticker-native"
+version = "1.0.6-preview.1"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+build = "build.rs"
+
+[lib]
+name = "liteticker_native"
+path = "src/lib.rs"
+
+[[bin]]
+name = "LiteTicker-preview"
+path = "src/main.rs"
+required-features = ["gui"]
+
+[features]
+default = ["renderer-femtovg-wgpu"]
+gui = ["dep:slint"]
+renderer-femtovg-wgpu = ["gui", "slint/renderer-femtovg-wgpu"]
+renderer-skia = ["gui", "slint/renderer-skia"]
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+encoding_rs = "0.8"
+futures-util = "0.3"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["native-tls", "json", "stream", "gzip"] }
+rust_decimal = { version = "1", features = ["serde-with-arbitrary-precision"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["arbitrary_precision"] }
+sha2 = "0.10"
+slint = { version = "=1.19.0", optional = true, default-features = false, features = ["std", "compat-1-18", "backend-winit", "raw-window-handle-06", "accessibility"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "fs", "io-util"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+
+[target.'cfg(windows)'.dependencies]
+raw-window-handle = "0.6"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_UI_Controls", "Win32_UI_Input_KeyboardAndMouse", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_System_Diagnostics_Debug", "Win32_Storage_FileSystem", "Win32_System_Console"] }
+
+[build-dependencies]
+slint-build = "=1.19.0"
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"

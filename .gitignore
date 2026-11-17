@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.tmp
+ticker_config.json
+watchlist_local.json
+codes.txt
+backups/
+output/
+.venv/
+dist/
+*.exe
+*.dll
+*.pdb
+settings.json
+settings.json.bak
+/legacy/
+/native/target/
