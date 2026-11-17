@@ -147,14 +147,14 @@ fn main() {
         #[cfg(windows)]
         {
             use windows_sys::Win32::UI::WindowsAndMessaging::*;
-            let message = format!("轻盘启动失败\n{e:#}\0")
+            let message = format!("轻量看盘启动失败\n{e:#}\0")
                 .encode_utf16()
                 .collect::<Vec<_>>();
             unsafe {
                 MessageBoxW(
                     std::ptr::null_mut(),
                     message.as_ptr(),
-                    windows_sys::w!("轻盘"),
+                    windows_sys::w!("轻量看盘"),
                     MB_ICONERROR,
                 );
             }

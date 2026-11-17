@@ -140,7 +140,7 @@ component TitleBar inherits WindowMoveArea {
     }
 }
 export component SettingsWindow inherits Window {
-    no-frame: true; title: "轻盘 · 设置"; default-font-family: "Microsoft YaHei UI"; background: #13161b;
+    no-frame: true; title: "轻量看盘 · 设置"; default-font-family: "Microsoft YaHei UI"; background: #13161b;
     in property <float> scale: 1.1;
     preferred-width: 760px * scale; preferred-height: 832px * scale; min-width: 570px * scale; min-height: 440px * scale;
     in property <string> version;
@@ -179,7 +179,7 @@ export component SettingsWindow inherits Window {
         }
         key-pressed(e) => {if e.text == Key.Return {if !root.update-busy {root.action("save");} return accept;} return reject;}
         VerticalLayout {padding-left: 30px * root.scale; padding-right: 30px * root.scale; padding-top: 24px * root.scale; padding-bottom: 24px * root.scale; spacing: 7px * root.scale;
-            TitleBar {scale: root.scale; heading: "轻盘设置"; subtitle: "桌面看盘助手  ·  v" + root.version; close => {root.action("close");}}
+            TitleBar {scale: root.scale; heading: "轻量看盘设置"; subtitle: "桌面端股票轻量看盘工具  ·  v" + root.version; close => {root.action("close");}}
             Rule {}
             HorizontalLayout {height: 42px * root.scale; spacing: 10px * root.scale;
                 for page[i] in ["常规设置","字体大小","版本与更新"]: DialogButton {scale: root.scale; text: page; quiet: true; navigation-tab: true; selected: root.tab == i;clicked => {root.tab = i;root.recording = -1;}}
@@ -234,7 +234,7 @@ export component SettingsWindow inherits Window {
 
 export struct SearchResult {name:string, code:string, market:string, chosen:bool, selected:bool}
 export component SearchWindow inherits Window {
-    no-frame:true; title:"轻盘 · 添加自选"; background:#13161b; default-font-family:"Microsoft YaHei UI";
+    no-frame:true; title:"轻量看盘 · 添加自选"; background:#13161b; default-font-family:"Microsoft YaHei UI";
     in property <float> scale:1;
     preferred-width:720px * scale; preferred-height:660px * scale; min-width:430px * scale; min-height:310px * scale;
     in-out property <string> query;

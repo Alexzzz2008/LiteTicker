@@ -149,7 +149,7 @@ impl UpdateClient {
         let version_name = page_url
             .as_str()
             .strip_prefix(&format!("{RELEASES}/tag/v"))
-            .context("最新版本地址不属于轻盘官方发布页")?;
+            .context("最新版本地址不属于轻量看盘官方发布页")?;
         if version(version_name)? <= version(crate::VERSION)? {
             return Ok(None);
         }
@@ -927,7 +927,7 @@ pub fn run_helper_if_requested() -> Option<i32> {
                     .encode_utf16()
                     .chain(Some(0))
                     .collect::<Vec<_>>();
-                let title = "轻盘正式版更新"
+                let title = "轻量看盘正式版更新"
                     .encode_utf16()
                     .chain(Some(0))
                     .collect::<Vec<_>>();

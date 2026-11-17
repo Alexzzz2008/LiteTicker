@@ -25,7 +25,7 @@ use windows_sys::Win32::{
     },
 };
 
-const PRODUCT: &str = "轻盘 · 桌面看盘助手";
+const PRODUCT: &str = "轻量看盘";
 const WAKE: u32 = 0x8001;
 const TRAY: u32 = WM_APP + 2;
 const OPEN_MENU: u32 = WM_APP + 3;
@@ -50,15 +50,18 @@ impl InstanceGuard {
         unsafe {
             let handle = CreateMutexW(null(), 0, name.as_ptr());
             if handle.is_null() {
-                return Err(std::io::Error::last_os_error()).context("无法创建轻盘单实例标识");
+                return Err(std::io::Error::last_os_error()).context("无法创建轻量看盘单实例标识");
             }
             let exists = GetLastError() == ERROR_ALREADY_EXISTS;
             if exists {
                 CloseHandle(handle);
-                let hwnd = FindWindowW(null(), wide(PRODUCT).as_ptr());
-                if !hwnd.is_null() {
-                    PostMessageW(hwnd, WAKE, 0, 0);
-                    SetForegroundWindow(hwnd);
+                for title in [PRODUCT, "轻盘 · 桌面看盘助手"] {
+                    let hwnd = FindWindowW(null(), wide(title).as_ptr());
+                    if !hwnd.is_null() {
+                        PostMessageW(hwnd, WAKE, 0, 0);
+                        SetForegroundWindow(hwnd);
+                        break;
+                    }
                 }
                 Ok(None)
             } else {
@@ -155,7 +158,7 @@ impl DesktopPlatform {
             .as_raw()
         {
             RawWindowHandle::Win32(value) => value.hwnd.get() as HWND,
-            _ => bail!("轻盘桌面集成只支持 Win32 窗口"),
+            _ => bail!("轻量看盘桌面集成只支持 Win32 窗口"),
         };
         let mut previous = 0;
         if unsafe { GetWindowSubclass(hwnd, Some(subclass), SUBCLASS_ID, &mut previous) } != 0 {
@@ -181,7 +184,7 @@ impl DesktopPlatform {
             unsafe {
                 DeleteObject(brush);
             }
-            bail!("无法读取轻盘托盘图标");
+            bail!("无法读取轻量看盘托盘图标");
         }
         let state = Box::new(NativeState {
             hwnd,
@@ -216,7 +219,7 @@ impl DesktopPlatform {
                 platform.state.as_ref() as *const _ as usize,
             ) == 0
             {
-                bail!("无法挂接轻盘桌面消息");
+                bail!("无法挂接轻量看盘桌面消息");
             }
             SetWindowTextW(hwnd, wide(PRODUCT).as_ptr());
             let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
@@ -236,7 +239,7 @@ impl DesktopPlatform {
         }
         platform.state.replace_font(22)?;
         if !platform.state.add_tray() {
-            bail!("无法创建轻盘系统托盘图标");
+            bail!("无法创建轻量看盘系统托盘图标");
         }
         Ok(platform)
     }
@@ -244,7 +247,7 @@ impl DesktopPlatform {
     pub fn notify_update(&self, version: &str) {
         let mut data = self.state.tray_data();
         data.uFlags = NIF_INFO;
-        let title = wide(&format!("轻盘有新版本 v{version}"));
+        let title = wide(&format!("轻量看盘有新版本 v{version}"));
         let text = wide("点击进入设置，下载并重启更新。");
         let n = title.len().min(data.szInfoTitle.len() - 1);
         data.szInfoTitle[..n].copy_from_slice(&title[..n]);
@@ -666,7 +669,7 @@ fn menu_label(id: u32) -> &'static str {
         9 => "退出",
         10 => "显示 / 隐藏",
         11 => "更新行情",
-        12 => "退出轻盘",
+        12 => "退出轻量看盘",
         13 => "设置 / 快捷键",
         _ => "",
     }
@@ -705,7 +708,7 @@ fn create_font(pixels: i32) -> Result<HFONT> {
         )
     };
     if font.is_null() {
-        bail!("无法创建轻盘菜单字体");
+        bail!("无法创建轻量看盘菜单字体");
     }
     Ok(font)
 }

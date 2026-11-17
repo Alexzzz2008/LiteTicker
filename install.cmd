@@ -16,7 +16,7 @@ exit /b %LITETICKER_INSTALL_EXIT%
 
 :powershell_unavailable
 echo 无法启动 Windows PowerShell。请检查或修复 Windows PowerShell 系统组件。
-echo 轻盘 v2 为 Windows x64 原生程序，无需安装 .NET Framework 或 VC++ 运行库。
+echo 轻量看盘 v2 为 Windows x64 原生程序，无需安装 .NET Framework 或 VC++ 运行库。
 echo 也可从官方 Releases 下载 LiteTicker-win.zip，解压后直接运行 LiteTicker.exe。
 echo https://github.com/Alexzzz2008/LiteTicker/releases/latest
 pause

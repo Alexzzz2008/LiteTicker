@@ -6,7 +6,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-if ($env:OS -ne 'Windows_NT' -or -not [Environment]::Is64BitOperatingSystem) { throw '轻盘需要 Windows x64。原生程序无需 .NET 或 VC++ 运行库安装。' }
+if ($env:OS -ne 'Windows_NT' -or -not [Environment]::Is64BitOperatingSystem) { throw '轻量看盘需要 Windows x64。原生程序无需 .NET 或 VC++ 运行库安装。' }
 
 function Release-ComObject {
     param([object]$Value)
@@ -18,11 +18,11 @@ function Release-ComObject {
 function Test-NativeSource {
     param([string]$Path)
     $bytes = [IO.File]::ReadAllBytes($Path)
-    if ($bytes.Length -lt 512 -or $bytes.Length -gt 20MB -or [BitConverter]::ToUInt16($bytes, 0) -ne 0x5a4d) { throw '安装文件不是有效的原生轻盘程序。' }
+    if ($bytes.Length -lt 512 -or $bytes.Length -gt 20MB -or [BitConverter]::ToUInt16($bytes, 0) -ne 0x5a4d) { throw '安装文件不是有效的原生轻量看盘程序。' }
     $pe = [BitConverter]::ToInt32($bytes, 0x3c)
     if ($pe -lt 64 -or $pe -gt $bytes.Length - 264 -or [BitConverter]::ToUInt32($bytes, $pe) -ne 0x4550 -or
         [BitConverter]::ToUInt16($bytes, $pe + 4) -ne 0x8664 -or [BitConverter]::ToUInt16($bytes, $pe + 24) -ne 0x20b -or
-        [BitConverter]::ToUInt64($bytes, $pe + 24 + 112 + 14 * 8) -ne 0) { throw '仅可安装 Windows x64 原生轻盘，不能使用旧版 .NET 或其他架构程序。' }
+        [BitConverter]::ToUInt64($bytes, $pe + 24 + 112 + 14 * 8) -ne 0) { throw '仅可安装 Windows x64 原生轻量看盘，不能使用旧版 .NET 或其他架构程序。' }
     $info = [Diagnostics.FileVersionInfo]::GetVersionInfo($Path)
     if ($info.ProductName -cne 'LiteTicker' -or $info.OriginalFilename -cne 'LiteTicker.exe' -or $info.ProductVersion -notmatch '^[1-9][0-9]*\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$' -or
         ([version]$info.ProductVersion).Major -lt 2 -or $info.FileVersion -cne ($info.ProductVersion + '.0')) { throw '程序身份或正式版本号不正确，请重新下载官方安装包。' }
@@ -71,7 +71,7 @@ function Get-PublicRelease {
         $metadata.html_url -cne ('https://github.com/Alexzzz2008/LiteTicker/releases/tag/' + $tag)) { throw '当前官方发布尚无可核验的原生正式版，请从仓库 Releases 下载 v2.0.0 或更新版本。' }
     $url = 'https://github.com/Alexzzz2008/LiteTicker/releases/download/' + $tag + '/LiteTicker.exe'
     $assets = @($metadata.assets | Where-Object { $_.name -ceq 'LiteTicker.exe' })
-    if ($assets.Count -ne 1 -or $assets[0].state -cne 'uploaded' -or $assets[0].browser_download_url -cne $url -or $assets[0].size -le 0 -or $assets[0].size -gt 20MB) { throw '官方轻盘资产名称、地址或大小无效。' }
+    if ($assets.Count -ne 1 -or $assets[0].state -cne 'uploaded' -or $assets[0].browser_download_url -cne $url -or $assets[0].size -le 0 -or $assets[0].size -gt 20MB) { throw '官方轻量看盘资产名称、地址或大小无效。' }
     $digest = if ($assets[0].PSObject.Properties['digest']) { [string]$assets[0].digest } else { '' }
     if ($digest -cmatch '^sha256:([0-9a-fA-F]{64})$') { $hash = $Matches[1].ToLowerInvariant() }
     elseif ($digest) { throw '官方程序摘要格式无效，安装已停止。' }
@@ -200,7 +200,7 @@ $InstallDir = [System.IO.Path]::GetFullPath($InstallDir)
 $target = Join-Path $InstallDir 'LiteTicker.exe'
 $processes = @(Get-Process -Name LiteTicker -ErrorAction SilentlyContinue)
 $running = @($processes | Where-Object { -not $_.Path -or [string]::Equals($_.Path, $target, [System.StringComparison]::OrdinalIgnoreCase) })
-if ($running.Count -gt 0) { throw '轻盘仍在运行。请在托盘菜单中选择“退出轻盘”（点击窗口 × 只会隐藏），再重新运行 install.cmd。' }
+if ($running.Count -gt 0) { throw '轻量看盘仍在运行。请在托盘菜单中选择“退出轻量看盘”（点击窗口 × 只会隐藏），再重新运行 install.cmd。' }
 
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 if (-not [string]::Equals([System.IO.Path]::GetFullPath($source), $target, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -222,26 +222,45 @@ $shell = New-Object -ComObject WScript.Shell
 $shortcut = $null
 try {
     $desktop = $shell.SpecialFolders.Item('Desktop')
-    $shortcutPath = Join-Path $desktop '轻盘 · 桌面看盘助手.lnk'
-    $legacyShortcutPath = Join-Path $desktop '轻盘.lnk'
-    if ((Test-Path -LiteralPath $legacyShortcutPath -PathType Leaf) -and -not (Test-Path -LiteralPath $shortcutPath)) {
-        $legacyShortcut = $shell.CreateShortcut($legacyShortcutPath)
-        try {
-            if ([string]::Equals($legacyShortcut.TargetPath, $target, [System.StringComparison]::OrdinalIgnoreCase)) {
-                Move-Item -LiteralPath $legacyShortcutPath -Destination $shortcutPath
-            }
-        } finally { Release-ComObject $legacyShortcut }
-    }
+    $shortcutPath = Join-Path $desktop '轻量看盘.lnk'
     if (Test-Path -LiteralPath $shortcutPath -PathType Leaf) {
         $shortcutBackup = $shortcutPath + '.' + [DateTime]::Now.ToString('yyyyMMdd-HHmmss-fffffff') + '.bak'
         Copy-Item -LiteralPath $shortcutPath -Destination $shortcutBackup
+    } else {
+        foreach ($legacyName in @('轻盘.lnk', '轻盘 · 桌面看盘助手.lnk')) {
+            $legacyShortcutPath = Join-Path $desktop $legacyName
+            if (-not (Test-Path -LiteralPath $legacyShortcutPath -PathType Leaf)) { continue }
+            $legacyShortcut = $null
+            $sameTarget = $false
+            try {
+                $legacyShortcut = $shell.CreateShortcut($legacyShortcutPath)
+                $sameTarget = [string]::Equals($legacyShortcut.TargetPath, $target, [System.StringComparison]::OrdinalIgnoreCase)
+            } catch { Write-Warning ('旧快捷方式无法作为迁移模板：' + $legacyName) }
+            finally { Release-ComObject $legacyShortcut }
+            if ($sameTarget) {
+                Copy-Item -LiteralPath $legacyShortcutPath -Destination $shortcutPath
+                break
+            }
+        }
     }
     $shortcut = $shell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath = $target
     $shortcut.WorkingDirectory = $InstallDir
     $shortcut.IconLocation = $iconPath + ',0'
-    $shortcut.Description = '轻盘 · 桌面看盘助手：股票行情、自选股与桌面行情小窗'
+    $shortcut.Description = '桌面端股票轻量看盘工具'
     $shortcut.Save()
+    foreach ($legacyName in @('轻盘.lnk', '轻盘 · 桌面看盘助手.lnk')) {
+        $legacyShortcutPath = Join-Path $desktop $legacyName
+        if (-not (Test-Path -LiteralPath $legacyShortcutPath -PathType Leaf)) { continue }
+        $legacyShortcut = $null
+        try {
+            $legacyShortcut = $shell.CreateShortcut($legacyShortcutPath)
+            if ([string]::Equals($legacyShortcut.TargetPath, $target, [System.StringComparison]::OrdinalIgnoreCase)) {
+                Remove-Item -LiteralPath $legacyShortcutPath
+            }
+        } catch { Write-Warning ('新快捷方式已保存，旧快捷方式未清理：' + $legacyName) }
+        finally { Release-ComObject $legacyShortcut }
+    }
 } finally {
     Release-ComObject $shortcut
     Release-ComObject $shell
