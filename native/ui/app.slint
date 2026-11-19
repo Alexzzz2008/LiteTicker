@@ -41,11 +41,13 @@ export component MainWindow inherits Window {
     in property <[QuoteRow]> rows;
     in property <string> footer;
     in-out property <int> selection: -1;
+    in-out property <bool> pointer-down: false;
     callback select-row(int);
     callback open-row(int);
     callback hover-row(int, bool);
     callback context(int);
     callback drag();
+    callback cancel-hover();
     callback key-action(string);
     preferred-width: 550px * q-scale;
     preferred-height: (14px + 43px * max(1, min(12, rows.length))) * q-scale + 34px * g-scale;
@@ -98,19 +100,35 @@ export component MainWindow inherits Window {
                         if event.kind == PointerEventKind.move && !self.pressed {
                             root.hover-row(i, true);
                         } else if event.kind == PointerEventKind.down {
+                            root.pointer-down = event.button == PointerEventButton.left;
+                            root.cancel-hover();
                             self.dragging = false;
                             keys.focus(); root.select-row(i);
                             if event.button == PointerEventButton.right { root.context(i); }
+                        } else if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel {
+                            root.pointer-down = false;
+                            root.hover-row(i, self.has-hover);
                         }
                     }
-                    double-clicked => { root.open-row(i); }
+                    double-clicked => { if !self.dragging { root.open-row(i); } }
                 }
             }
         }
         Rectangle {
             height: 34px * root.g-scale;
             Text { x: 4px; text: root.footer; font-size: 16px * root.g-scale; color: #9898a3; vertical-alignment: center; overflow: elide; }
-            TouchArea { pointer-event(e) => { if e.kind == PointerEventKind.down { if e.button == PointerEventButton.right {root.context(root.selection);} else if e.button == PointerEventButton.left {root.drag();} } } }
+            TouchArea {
+                pointer-event(e) => {
+                    if e.kind == PointerEventKind.down {
+                        root.pointer-down = e.button == PointerEventButton.left;
+                        root.cancel-hover();
+                        if e.button == PointerEventButton.right {root.context(root.selection);}
+                        else if e.button == PointerEventButton.left {root.drag();}
+                    } else if e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel {
+                        root.pointer-down = false;
+                    }
+                }
+            }
         }
     }
 }

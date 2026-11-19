@@ -157,6 +157,229 @@ fn click_name(app: &App, row: usize) {
     window.dispatch_event(WindowEvent::PointerReleased { position, button });
 }
 
+#[derive(Clone, Copy)]
+enum NamePointer {
+    Hover,
+    Press,
+    Drag,
+    Release,
+}
+
+fn name_pointer(app: &App, row: usize, offset: f32, action: NamePointer) -> Result<()> {
+    let window = app.window.window();
+    let mut position = name_position(app, row);
+    position.x += offset;
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::UI::{HiDpi::SetThreadDpiAwarenessContext, WindowsAndMessaging::*};
+        let h = hwnd(window).context("缺少列表指针目标")?;
+        let physical = position.to_physical(window.scale_factor());
+        let at = ((physical.x as u16 as u32) | ((physical.y as u16 as u32) << 16)) as isize;
+        let old = SetThreadDpiAwarenessContext(-4_isize as _);
+        let mut sent = PostMessageW(
+            h,
+            WM_MOUSEMOVE,
+            usize::from(matches!(action, NamePointer::Drag | NamePointer::Release)),
+            at,
+        ) != 0;
+        match action {
+            NamePointer::Press => sent &= PostMessageW(h, WM_LBUTTONDOWN, 1, at) != 0,
+            NamePointer::Release => sent &= PostMessageW(h, WM_LBUTTONUP, 0, at) != 0,
+            _ => {}
+        }
+        SetThreadDpiAwarenessContext(old);
+        ensure!(sent, "无法发送列表指针输入");
+    }
+    #[cfg(not(windows))]
+    {
+        use slint::platform::{PointerEventButton, WindowEvent};
+        window.dispatch_event(WindowEvent::PointerMoved { position });
+        match action {
+            NamePointer::Press => window.dispatch_event(WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            }),
+            NamePointer::Release => window.dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            }),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn check_hover_depth(app: &App, row: Option<usize>, pinned: bool) -> Result<()> {
+    let expected = row.map(|i| app.replay.as_ref().unwrap().quotes[i].symbol.clone());
+    ensure!(
+        *app.detail_symbol.borrow() == expected && app.pinned.get() == pinned,
+        "拖动/悬停盘口状态错误：预期{expected:?} 固定{pinned}，实际{:?} 固定{}",
+        app.detail_symbol.borrow(),
+        app.pinned.get()
+    );
+    let depth = app.depth.borrow();
+    let visible = depth.as_ref().is_some_and(|d| d.window().is_visible());
+    ensure!(visible == row.is_some(), "拖动/悬停盘口可见性错误");
+    #[cfg(windows)]
+    if let Some(d) = depth.as_ref() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::IsWindowVisible;
+        let h = hwnd(d.window()).context("盘口原生句柄丢失")?;
+        ensure!(
+            unsafe { IsWindowVisible(h) != 0 } == row.is_some(),
+            "盘口原生可见性错误"
+        );
+    }
+    Ok(())
+}
+
+// This coordinate fixture stays inside its own HWND; a different desktop's hardware
+// cursor must not cancel its synthetic hover with an unrelated WM_MOUSELEAVE.
+fn quote_pointer_tracking(app: &App, active: bool) -> Result<()> {
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::UI::Shell::{RemoveWindowSubclass, SetWindowSubclass};
+        const ID: usize = 0x4c545250;
+        unsafe extern "system" fn filter(
+            h: *mut std::ffi::c_void,
+            message: u32,
+            wp: usize,
+            lp: isize,
+            _: usize,
+            _: usize,
+        ) -> isize {
+            if message == windows_sys::Win32::UI::Controls::WM_MOUSELEAVE {
+                return 0;
+            }
+            unsafe { windows_sys::Win32::UI::Shell::DefSubclassProc(h, message, wp, lp) }
+        }
+        let h = hwnd(app.window.window()).context("缺少指针验收原生窗口")?;
+        let changed = if active {
+            SetWindowSubclass(h, Some(filter), ID, 0)
+        } else {
+            RemoveWindowSubclass(h, Some(filter), ID)
+        };
+        ensure!(changed != 0, "无法更新指针验收鼠标跟踪过滤");
+    }
+    #[cfg(not(windows))]
+    let _ = (app, active);
+    Ok(())
+}
+
+// Give the real event queue and the 180 ms hover timer time to run between inputs.
+fn check_quote_drag(app: Rc<App>, out: PathBuf, complete: Rc<Cell<bool>>, step: u8) {
+    let test = (|| -> Result<()> {
+        match step {
+            0 => {
+                quote_pointer_tracking(&app, true)?;
+                app.close_depth();
+                name_pointer(&app, 0, 0., NamePointer::Press)?;
+            }
+            1 => {
+                check_hover_depth(&app, None, false)?;
+                name_pointer(&app, 0, 8., NamePointer::Drag)?;
+            }
+            2 => {
+                check_hover_depth(&app, None, false)?;
+                name_pointer(&app, 1, 8., NamePointer::Drag)?;
+            }
+            3 => {
+                check_hover_depth(&app, None, false)?;
+                name_pointer(&app, 1, 8., NamePointer::Release)?;
+                name_pointer(&app, 1, 0., NamePointer::Hover)?;
+            }
+            4 => {
+                check_hover_depth(&app, Some(1), false)?;
+                name_pointer(&app, 0, 0., NamePointer::Hover)?;
+            }
+            5 => {
+                check_hover_depth(&app, Some(0), false)?;
+                name_pointer(&app, 0, 0., NamePointer::Press)?;
+                name_pointer(&app, 0, 8., NamePointer::Drag)?;
+            }
+            6 => {
+                check_hover_depth(&app, None, false)?;
+                name_pointer(&app, 0, 8., NamePointer::Release)?;
+                name_pointer(&app, 0, 0., NamePointer::Hover)?;
+            }
+            7 => {
+                check_hover_depth(&app, Some(0), false)?;
+                name_pointer(&app, 0, 0., NamePointer::Press)?;
+                name_pointer(&app, 0, 0., NamePointer::Release)?;
+                let next_app = app.clone();
+                let next_out = out.clone();
+                Timer::single_shot(Duration::from_millis(30), move || {
+                    let gesture = (|| -> Result<()> {
+                        name_pointer(&next_app, 0, 0., NamePointer::Press)?;
+                        name_pointer(&next_app, 0, 6., NamePointer::Drag)?;
+                        name_pointer(&next_app, 0, 6., NamePointer::Release)
+                    })();
+                    if let Err(error) = gesture {
+                        let _ = std::fs::write(
+                            next_out.join("result.txt"),
+                            format!("FAIL second-click drag input: {error:#}"),
+                        );
+                        std::process::exit(1);
+                    }
+                });
+            }
+            8 => {
+                ensure!(!app.pinned.get(), "短间隔第二次按下后拖动误触发双击固定");
+                name_pointer(&app, 0, 0., NamePointer::Hover)?;
+            }
+            9 => {
+                check_hover_depth(&app, Some(0), false)?;
+                app.depth
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .invoke_command("pin".into());
+                name_pointer(&app, 0, 0., NamePointer::Press)?;
+                name_pointer(&app, 1, 8., NamePointer::Drag)?;
+            }
+            10 => {
+                check_hover_depth(&app, Some(0), true)?;
+                name_pointer(&app, 1, 8., NamePointer::Release)?;
+                name_pointer(&app, 1, 0., NamePointer::Hover)?;
+            }
+            11 => {
+                check_hover_depth(&app, Some(0), true)?;
+                quote_pointer_tracking(&app, false)?;
+                complete.set(true);
+                return Ok(());
+            }
+            _ => unreachable!(),
+        }
+        Ok(())
+    })();
+    if let Err(error) = test {
+        let _ = std::fs::write(
+            out.join("result.txt"),
+            format!("FAIL quote pointer step {step}: {error:#}"),
+        );
+        std::process::exit(1);
+    }
+    if !complete.get() {
+        let mut delay = if step == 7 { 600 } else { 300 };
+        if step == 6 {
+            // Start a new pair independently of the preceding drag's press.
+            #[cfg(windows)]
+            {
+                delay = unsafe {
+                    windows_sys::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime()
+                } as u64
+                    + 100;
+            }
+            #[cfg(not(windows))]
+            {
+                delay = 1100;
+            }
+        }
+        Timer::single_shot(Duration::from_millis(delay), move || {
+            check_quote_drag(app, out, complete, step + 1);
+        });
+    }
+}
+
 #[cfg(windows)]
 fn check_dialog_order(app: &App, window: &slint::Window, topmost: bool) -> Result<()> {
     use windows_sys::Win32::UI::{
@@ -418,6 +641,7 @@ pub fn start(app: Rc<App>, out: PathBuf) -> Result<Timer> {
     let mut phase = -5_i32;
     let mut hidden_tick = 0;
     let mut settings_input = SettingsInput::default();
+    let drag_checked = Rc::new(Cell::new(false));
     let timer = Timer::default();
     timer.start(TimerMode::Repeated, Duration::from_millis(1500), move || {
         if phase == -5 && app.tick.get() < 2 && app.start.elapsed() < Duration::from_secs(20) {
@@ -467,8 +691,13 @@ pub fn start(app: Rc<App>, out: PathBuf) -> Result<Timer> {
                     capture(app.window.window(), &out.join("quotes.png"))?;
                     app.window.invoke_select_row(0);
                     app.window.invoke_open_row(0);
+                    check_quote_drag(app.clone(), out.clone(), drag_checked.clone(), 0);
                 }
                 1 | 2 => {
+                    if !drag_checked.get() {
+                        advance = false;
+                        return Ok(());
+                    }
                     let d = app.depth.borrow().as_ref().context("盘口没有打开")?.clone_strong();
                     ensure!(d.get_pinned() && d.get_has_chart() && d.get_ladder().row_count() == 10, "盘口、图表或五档未就绪");
                     ensure!(d.get_trades().row_count() == 10, "成交表必须显示10行数据或占位");
@@ -572,7 +801,7 @@ pub fn start(app: Rc<App>, out: PathBuf) -> Result<Timer> {
                 }
                 _ => {
                     ensure!(app.visible.get() && app.tick.get() > hidden_tick, "托盘恢复后未刷新");
-                    std::fs::write(out.join("result.txt"), "PASS quote replay, 550x564 geometry, hover before and after click, pinned hover, price columns stable across lot widths and quantities at both table edges, depth and chart modes, settings tabs after title drag, toggle, cancel and save, explicit search, opacity and topmost, close-to-tray and restore")?;
+                    std::fs::write(out.join("result.txt"), "PASS quote replay, 550x564 geometry, hover before and after click, held pointer and cross-row drag suppress unpinned depth, release resumes hover, pinned depth survives drag, price columns stable across lot widths and quantities at both table edges, depth and chart modes, settings tabs after title drag, toggle, cancel and save, explicit search, opacity and topmost, close-to-tray and restore")?;
                     app.command("exit");
                 }
             }

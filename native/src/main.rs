@@ -378,7 +378,6 @@ impl App {
                 if let Some(id) = id {
                     a.selection.replace(Some(id.clone()));
                     a.window.set_selection(i);
-                    a.show_depth(&id, false);
                 }
             })
         });
@@ -393,6 +392,8 @@ impl App {
         self.window
             .on_hover_row(|i, inside| with_app(|a| a.hover_row(i, inside)));
         self.window
+            .on_cancel_hover(|| with_app(|a| a.cancel_hover()));
+        self.window
             .on_key_action(|key| with_app(|a| a.command(&key)));
         self.window.on_context(|_| {
             with_app(|a| {
@@ -404,6 +405,7 @@ impl App {
         });
         self.window.on_drag(|| {
             with_app(|a| {
+                a.cancel_hover();
                 #[cfg(windows)]
                 if let Some(p) = a.platform.borrow().as_ref() {
                     p.start_drag();
@@ -783,6 +785,26 @@ impl App {
     }
 }
 impl App {
+    fn cancel_hover(&self) {
+        self.hovered_symbol.take();
+        self.hover.stop();
+        self.leave.stop();
+        if !self.pinned.get() {
+            self.close_depth();
+        }
+    }
+    fn pointer_pressed(&self) -> bool {
+        if self.window.get_pointer_down() {
+            return true;
+        }
+        #[cfg(windows)]
+        unsafe {
+            use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
+            return GetAsyncKeyState(i32::from(VK_LBUTTON)) < 0;
+        }
+        #[cfg(not(windows))]
+        false
+    }
     fn hover_row(self: &Rc<Self>, row: i32, inside: bool) {
         if self.modal() || self.pinned.get() || !self.visible.get() {
             return;
@@ -800,6 +822,10 @@ impl App {
             }
             return;
         }
+        if self.pointer_pressed() {
+            self.cancel_hover();
+            return;
+        }
         self.leave.stop();
         if same {
             return;
@@ -811,12 +837,17 @@ impl App {
             });
     }
     fn show_hovered(self: &Rc<Self>) {
-        if !self.pinned.get() {
-            let symbol = self.hovered_symbol.borrow().clone();
-            if let Some(symbol) = symbol {
-                self.show_depth(&symbol, false);
-            }
+        if self.pinned.get() {
+            return;
         }
+        let Some(symbol) = self.hovered_symbol.borrow().clone() else {
+            return;
+        };
+        if self.pointer_pressed() {
+            self.cancel_hover();
+            return;
+        }
+        self.show_depth(&symbol, false);
     }
     fn schedule_leave(&self) {
         self.leave

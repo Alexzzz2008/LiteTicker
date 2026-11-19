@@ -63,7 +63,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $notesPath = Join-Path $env:RUNNER_TEMP 'liteticker-release-notes.md'
           $notes = @(
-            '应用中文名称调整为「轻量看盘」，简介调整为「桌面端股票轻量看盘工具」，其他功能与交互保持不变。',
+            '拖动主股票列表时暂停盘口悬停弹出，松开后恢复正常悬停查看。',
             '',
             '推荐下载 LiteTicker.exe，双击即可运行。也可下载 ZIP 安装包，完整解压后双击 install.cmd。'
           )

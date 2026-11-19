@@ -533,6 +533,8 @@ unsafe extern "system" fn subclass(
                         HTCAPTION as usize,
                         position as isize,
                     );
+                    // The native move loop consumes the release, so clear Slint's pressed state.
+                    PostMessageW(hwnd, WM_LBUTTONUP, 0, 0);
                 }
                 return 0;
             }
