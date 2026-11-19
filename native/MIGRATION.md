@@ -1,6 +1,6 @@
 # Rust + Slint 迁移验收
 
-行为、交互、配色和配置基线为正式版 v1.0.5（51de3c8），附件中的 v1.0.4 基线由此替换。已删除的固定本地路径迁移与 docs 目录不恢复。
+行为、交互、配色和配置基线为正式版 v1.0.5，附件中的 v1.0.4 基线由此替换。v1.0.5 及更早的 C# 实现与回放基准工具已从本仓库移除，本文件只保留迁移结论与测量记录。
 
 v2.0.0 使用 Rust 与 Slint 构建 Windows x64 单文件。发布候选在 Windows 11 上验证了行情、盘口、设置和自选页面、透明度、托盘及更新替换和回滚。Windows 10 22H2 的独立验收待补。
 
@@ -38,7 +38,7 @@ v2.0.0 使用 Rust 与 Slint 构建 Windows x64 单文件。发布候选在 Wind
 cargo test --locked --no-default-features
 cargo build --locked --release --target x86_64-pc-windows-msvc
 $exe = (Resolve-Path .\target\x86_64-pc-windows-msvc\release\LiteTicker.exe).Path
-$fixture = (Resolve-Path .\bench\replay.json).Path
+$fixture = '<本地回放 JSON 路径>'
 $out = Join-Path $env:TEMP ("LiteTicker-ui-" + [guid]::NewGuid())
 & $exe --replay $fixture --verify-replay $out | Out-Host
 Get-Content (Join-Path $out 'result.txt')
@@ -51,14 +51,6 @@ Get-Content (Join-Path $out 'result.txt')
 ```powershell
 cargo build --locked --release --no-default-features --features renderer-femtovg-wgpu --target x86_64-pc-windows-msvc --target-dir target-wgpu
 cargo test --locked --no-default-features --test live_market -- --ignored --nocapture
-```
-
-旧版基准入口使用标签 `v1.0.5` 的产品源文件与图标，以相同的 1 秒节奏输入相同的 20 只报价。用 Windows PowerShell 在本地磁盘运行。以下为每版三轮、每轮预热 120 秒后采样 600 秒的命令；快速筛查可传 `-WarmupSeconds 20 -SampleSeconds 60 -Repeat 1`。
-
-```powershell
-$baseline = Join-Path $env:TEMP ("LiteTicker-baseline-" + [guid]::NewGuid())
-.\bench\build-baseline.ps1 -OutputDirectory $baseline
-.\bench\measure.ps1 -BaselineExe (Join-Path $baseline BaselineReplay.exe) -NativeExe $exe -Fixture $fixture -RunUi
 ```
 
 ## Windows 11 同机筛查
