@@ -63,7 +63,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $notesPath = Join-Path $env:RUNNER_TEMP 'liteticker-release-notes.md'
           $notes = @(
-            '拖动主股票列表时暂停盘口悬停弹出，松开后恢复正常悬停查看。',
+            '修复未固定的盘口在「分时」和「日 K」间切换时误关闭的问题。鼠标移出盘口后仍会自动关闭。',
             '',
             '推荐下载 LiteTicker.exe，双击即可运行。也可下载 ZIP 安装包，完整解压后双击 install.cmd。'
           )

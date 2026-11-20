@@ -234,7 +234,7 @@ fn check_hover_depth(app: &App, row: Option<usize>, pinned: bool) -> Result<()> 
 
 // This coordinate fixture stays inside its own HWND; a different desktop's hardware
 // cursor must not cancel its synthetic hover with an unrelated WM_MOUSELEAVE.
-fn quote_pointer_tracking(app: &App, active: bool) -> Result<()> {
+fn filter_pointer_leave(window: &slint::Window, active: bool) -> Result<()> {
     #[cfg(windows)]
     unsafe {
         use windows_sys::Win32::UI::Shell::{RemoveWindowSubclass, SetWindowSubclass};
@@ -252,7 +252,7 @@ fn quote_pointer_tracking(app: &App, active: bool) -> Result<()> {
             }
             unsafe { windows_sys::Win32::UI::Shell::DefSubclassProc(h, message, wp, lp) }
         }
-        let h = hwnd(app.window.window()).context("缺少指针验收原生窗口")?;
+        let h = hwnd(window).context("缺少指针验收原生窗口")?;
         let changed = if active {
             SetWindowSubclass(h, Some(filter), ID, 0)
         } else {
@@ -261,7 +261,7 @@ fn quote_pointer_tracking(app: &App, active: bool) -> Result<()> {
         ensure!(changed != 0, "无法更新指针验收鼠标跟踪过滤");
     }
     #[cfg(not(windows))]
-    let _ = (app, active);
+    let _ = (window, active);
     Ok(())
 }
 
@@ -270,7 +270,7 @@ fn check_quote_drag(app: Rc<App>, out: PathBuf, complete: Rc<Cell<bool>>, step: 
     let test = (|| -> Result<()> {
         match step {
             0 => {
-                quote_pointer_tracking(&app, true)?;
+                filter_pointer_leave(app.window.window(), true)?;
                 app.close_depth();
                 name_pointer(&app, 0, 0., NamePointer::Press)?;
             }
@@ -343,7 +343,43 @@ fn check_quote_drag(app: Rc<App>, out: PathBuf, complete: Rc<Cell<bool>>, step: 
             }
             11 => {
                 check_hover_depth(&app, Some(0), true)?;
-                quote_pointer_tracking(&app, false)?;
+                app.close_depth();
+                name_pointer(&app, 0, 0., NamePointer::Hover)?;
+            }
+            12 => {
+                check_hover_depth(&app, Some(0), false)?;
+                app.window
+                    .window()
+                    .dispatch_event(slint::platform::WindowEvent::PointerExited);
+                let depth = app.depth.borrow().as_ref().unwrap().clone_strong();
+                let window = depth.window();
+                let scale = depth.get_scale() * window.scale_factor();
+                filter_pointer_leave(window, true)?;
+                window.dispatch_event(slint::platform::WindowEvent::PointerMoved {
+                    position: slint::LogicalPosition::new(20., 200.),
+                });
+                click_dialog(window, 173. * scale, 138. * scale)?;
+            }
+            13 => {
+                check_hover_depth(&app, Some(0), false).context("点击日 K 后盘口应保持打开")?;
+                let depth = app.depth.borrow().as_ref().unwrap().clone_strong();
+                ensure!(depth.get_daily(), "点击日 K 未切换图表");
+                let scale = depth.get_scale() * depth.window().scale_factor();
+                click_dialog(depth.window(), 67. * scale, 138. * scale)?;
+            }
+            14 => {
+                check_hover_depth(&app, Some(0), false).context("点击分时后盘口应保持打开")?;
+                let depth = app.depth.borrow().as_ref().unwrap().clone_strong();
+                ensure!(!depth.get_daily(), "点击分时未切换图表");
+                filter_pointer_leave(depth.window(), false)?;
+                depth
+                    .window()
+                    .dispatch_event(slint::platform::WindowEvent::PointerExited);
+            }
+            15 => {
+                check_hover_depth(&app, None, false).context("移出未固定的盘口后应自动关闭")?;
+                app.window.invoke_open_row(0);
+                filter_pointer_leave(app.window.window(), false)?;
                 complete.set(true);
                 return Ok(());
             }
@@ -801,7 +837,7 @@ pub fn start(app: Rc<App>, out: PathBuf) -> Result<Timer> {
                 }
                 _ => {
                     ensure!(app.visible.get() && app.tick.get() > hidden_tick, "托盘恢复后未刷新");
-                    std::fs::write(out.join("result.txt"), "PASS quote replay, 550x564 geometry, hover before and after click, held pointer and cross-row drag suppress unpinned depth, release resumes hover, pinned depth survives drag, price columns stable across lot widths and quantities at both table edges, depth and chart modes, settings tabs after title drag, toggle, cancel and save, explicit search, opacity and topmost, close-to-tray and restore")?;
+                    std::fs::write(out.join("result.txt"), "PASS quote replay, 550x564 geometry, hover before and after click, held pointer and cross-row drag suppress unpinned depth, release resumes hover, pinned depth survives drag, unpinned depth stays open when switching charts and closes on pointer exit, price columns stable across lot widths and quantities at both table edges, depth and chart modes, settings tabs after title drag, toggle, cancel and save, explicit search, opacity and topmost, close-to-tray and restore")?;
                     app.command("exit");
                 }
             }

@@ -1128,7 +1128,8 @@ fn identity_checks_file_version_original_filename_and_handoff_arguments() {
     let signature = 0xFEEF04BD_u32.to_le_bytes();
     let index = bytes.windows(4).position(|s| s == signature).unwrap();
     let mut wrong = bytes.clone();
-    put32(&mut wrong, index + 12, 7 << 16);
+    let file_version_low = u32_at(&bytes, index + 12).unwrap();
+    put32(&mut wrong, index + 12, file_version_low ^ (1 << 16));
     assert!(native_identity(&wrong).is_err());
     let name = utf16(ASSET);
     let index = bytes.windows(name.len()).position(|s| s == name).unwrap();
