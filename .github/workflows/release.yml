@@ -63,7 +63,9 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $notesPath = Join-Path $env:RUNNER_TEMP 'liteticker-release-notes.md'
           $notes = @(
-            '修复未固定的盘口在「分时」和「日 K」间切换时误关闭的问题。鼠标移出盘口后仍会自动关闭。',
+            '- 修复分笔成交刷新偶尔跳过一轮的问题。腾讯行情同一秒有多笔成交时，现在按序号显示最新记录。',
+            '- 从托盘恢复行情窗口只刷新一次，打开设置也不会额外请求报价。',
+            '- 重复保存相同配置时保留上一次备份，配置超过读取上限时保留原文件。',
             '',
             '推荐下载 LiteTicker.exe，双击即可运行。也可下载 ZIP 安装包，完整解压后双击 install.cmd。'
           )
