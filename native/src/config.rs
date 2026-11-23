@@ -9,6 +9,8 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+const MAX_SETTINGS_BYTES: usize = 2 * 1024 * 1024;
+
 #[derive(Clone, Debug)]
 pub struct SettingsStore {
     pub directory_path: PathBuf,
@@ -39,8 +41,9 @@ impl SettingsStore {
             Err(e) => return Err(e).context("无法读取配置"),
         };
         let mut bytes = Vec::new();
-        file.take(2 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
-        if bytes.len() > 2 * 1024 * 1024 {
+        file.take(MAX_SETTINGS_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > MAX_SETTINGS_BYTES {
             bail!("配置文件超过大小上限");
         }
         let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&bytes);
@@ -112,11 +115,25 @@ impl SettingsStore {
         Ok(settings)
     }
     pub fn save(&self, settings: &AppSettings) -> Result<()> {
+        let bytes = serde_json::to_vec(settings)?;
+        if bytes.len() > MAX_SETTINGS_BYTES {
+            bail!("配置文件超过大小上限");
+        }
         fs::create_dir_all(&self.directory_path)?;
         let target = self.file_path();
+        if let Ok(file) = File::open(&target)
+            && file.metadata()?.len() == bytes.len() as u64
+        {
+            let mut previous = Vec::with_capacity(bytes.len());
+            file.take(bytes.len() as u64 + 1)
+                .read_to_end(&mut previous)?;
+            if previous == bytes {
+                return Ok(());
+            }
+        }
         let (temporary, mut file) = create_temporary(&self.directory_path)?;
         let result = (|| -> Result<()> {
-            file.write_all(&serde_json::to_vec(settings)?)?;
+            file.write_all(&bytes)?;
             file.sync_all()?;
             drop(file);
             if target.exists() {

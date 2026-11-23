@@ -1,4 +1,4 @@
-use super::{json_object, number, text};
+use super::{decimal, json_object, number, text};
 use crate::model::{DepthLevel, MarketSource, Quote};
 use anyhow::Result;
 use chrono::NaiveDateTime;
@@ -34,7 +34,7 @@ pub(super) fn parse(
         let Some(mut quote) = make_quote(
             symbol,
             &name,
-            [&row["f2"], &row["f18"], &row["f3"], &row["f5"], &row["f6"]],
+            ["f2", "f18", "f3", "f5", "f6"].map(|field| number(&row[field])),
             Decimal::ONE,
         ) else {
             continue;
@@ -62,17 +62,13 @@ fn tencent(payload: &str, mapping: &HashMap<String, String>) -> Vec<Quote> {
             continue;
         };
         let fields: Vec<&str> = capture[2].split('~').collect();
-        if fields.len() < 38 || fields[1].trim().is_empty() {
+        if fields.len() < 38 || fields[1].trim().is_empty() || fields[2] != &symbol[..6] {
             continue;
         }
-        let values: Vec<Value> = [3, 4, 32, 6, 37]
-            .iter()
-            .map(|i| Value::String(fields[*i].into()))
-            .collect();
         let Some(mut quote) = make_quote(
             symbol,
             fields[1],
-            [&values[0], &values[1], &values[2], &values[3], &values[4]],
+            [3, 4, 32, 6, 37].map(|index| decimal(fields[index])),
             Decimal::from(10000),
         ) else {
             continue;
@@ -93,8 +89,8 @@ fn depth(fields: &[&str], offset: usize) -> Vec<DepthLevel> {
     let levels = (0..5)
         .map(|i| {
             match (
-                number(&Value::String(fields[offset + i * 2].into())),
-                number(&Value::String(fields[offset + i * 2 + 1].into())),
+                decimal(fields[offset + i * 2]),
+                decimal(fields[offset + i * 2 + 1]),
             ) {
                 (Some(price), Some(volume_lots))
                     if price > Decimal::ZERO && volume_lots >= Decimal::ZERO =>
@@ -108,8 +104,13 @@ fn depth(fields: &[&str], offset: usize) -> Vec<DepthLevel> {
         .collect();
     if any { levels } else { Vec::new() }
 }
-fn make_quote(symbol: &str, name: &str, values: [&Value; 5], multiplier: Decimal) -> Option<Quote> {
-    let (mut price, close) = (number(values[0])?, number(values[1])?);
+fn make_quote(
+    symbol: &str,
+    name: &str,
+    [price, close, percent, volume, amount]: [Option<Decimal>; 5],
+    multiplier: Decimal,
+) -> Option<Quote> {
+    let (mut price, close) = (price?, close?);
     if price < Decimal::ZERO || close < Decimal::ZERO {
         return None;
     }
@@ -120,7 +121,9 @@ fn make_quote(symbol: &str, name: &str, values: [&Value; 5], multiplier: Decimal
     if price <= Decimal::ZERO {
         return None;
     }
-    let mut percent = if let Some(n) = number(values[2]) {
+    let percent = if suspended {
+        Decimal::ZERO
+    } else if let Some(n) = percent {
         n
     } else if close > Decimal::ZERO {
         price
@@ -130,11 +133,8 @@ fn make_quote(symbol: &str, name: &str, values: [&Value; 5], multiplier: Decimal
     } else {
         Decimal::ZERO
     };
-    if suspended {
-        percent = Decimal::ZERO;
-    }
-    let volume = number(values[3]).unwrap_or_default();
-    let amount = number(values[4]).unwrap_or_default();
+    let volume = volume.unwrap_or_default();
+    let amount = amount.unwrap_or_default();
     if volume < Decimal::ZERO || amount < Decimal::ZERO {
         return None;
     }

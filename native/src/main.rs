@@ -413,7 +413,14 @@ impl App {
             })
         });
         self.window.window().on_close_requested(|| {
-            with_app(|a| a.hide());
+            with_app(|a| {
+                #[cfg(windows)]
+                if a.platform.borrow().is_some() {
+                    a.hide();
+                    return;
+                }
+                a.command("exit");
+            });
             slint::CloseRequestResponse::KeepWindowShown
         });
     }
@@ -461,7 +468,8 @@ impl App {
     }
     fn render(&self) {
         let s = self.settings.borrow();
-        let snap = self.quotes.borrow().snapshot();
+        let quotes = self.quotes.borrow();
+        let snap = quotes.snapshot_ref();
         let scale = self.window.window().scale_factor().max(1.);
         self.window
             .set_q_scale(percent(s.quote_font_percent, s.global_font_percent) / scale);
@@ -539,7 +547,7 @@ impl App {
         self.quote_timer.stop();
         let request = self.quotes.borrow_mut().begin_refresh();
         let Some(r) = request else {
-            if self.quotes.borrow().snapshot().busy {
+            if self.quotes.borrow().snapshot_ref().busy {
                 self.pending.set(true);
             }
             return;
@@ -631,6 +639,10 @@ impl App {
         if self.modal() {
             return;
         }
+        if let Err(error) = self.window.hide() {
+            self.window.set_footer(error.to_string().into());
+            return;
+        }
         self.visible.set(false);
         self.quote_timer.stop();
         self.pending.set(false);
@@ -638,16 +650,20 @@ impl App {
             .borrow_mut()
             .update_settings(self.settings.borrow().clone());
         self.close_depth();
-        let _ = self.window.hide();
     }
     fn show(self: &Rc<Self>) {
-        self.visible.set(true);
-        let _ = self.window.show();
+        if let Err(error) = self.window.show() {
+            self.window.set_footer(error.to_string().into());
+            return;
+        }
+        let was_visible = self.visible.replace(true);
         #[cfg(windows)]
         if let Some(p) = self.platform.borrow().as_ref() {
             p.show_and_activate();
         }
-        self.refresh();
+        if !was_visible {
+            self.refresh();
+        }
     }
     fn command(self: &Rc<Self>, cmd: &str) {
         if self.modal() {
@@ -694,8 +710,7 @@ impl App {
                     s.x = p.x;
                     s.y = p.y;
                     if let Err(e) = self.store.save(&s) {
-                        self.window.set_footer(e.to_string().into());
-                        return;
+                        eprintln!("未能保存退出时的窗口位置：{e:#}");
                     }
                 }
                 self.quote_timer.stop();
@@ -709,12 +724,6 @@ impl App {
     #[cfg(windows)]
     fn desktop(self: &Rc<Self>, cmd: DesktopCommand) {
         use DesktopCommand::*;
-        if matches!(cmd, ShowSettings | ShowUpdates | AddSymbols)
-            && !self.modal()
-            && !self.visible.get()
-        {
-            self.show();
-        }
         self.command(match cmd {
             ToggleVisibility => "toggle",
             ShowSettings => "settings",
@@ -877,7 +886,7 @@ impl App {
     fn show_depth(self: &Rc<Self>, id: &str, pin: bool) {
         if self.modal()
             || !self.visible.get()
-            || !self.quotes.borrow().snapshot().quotes.contains_key(id)
+            || !self.quotes.borrow().snapshot_ref().quotes.contains_key(id)
         {
             return;
         }
@@ -965,47 +974,42 @@ impl App {
         self.render_depth();
         self.arm_details_timer();
     }
-    fn arm_details_timer(&self) {
-        let s = self.settings.borrow();
-        let sec = if self.replay.is_some() || is_trading_time(beijing_now()) {
-            s.trade_refresh_seconds
+    fn trade_refresh_interval(&self) -> Duration {
+        let seconds = if self.replay.is_some() || is_trading_time(beijing_now()) {
+            self.settings.borrow().trade_refresh_seconds
         } else {
             30
         };
-        self.detail_timer.start(
-            TimerMode::SingleShot,
-            Duration::from_secs(sec as u64),
-            || {
+        Duration::from_secs(seconds as u64)
+    }
+    fn arm_details_timer(&self) {
+        self.detail_timer
+            .start(TimerMode::SingleShot, self.trade_refresh_interval(), || {
                 with_app(|a| {
                     if a.detail_symbol.borrow().is_some() {
                         a.refresh_details(false);
                         a.arm_details_timer();
                     }
                 })
-            },
-        );
+            });
     }
     fn refresh_details(self: &Rc<Self>, force: bool) {
         let Some(id) = self.detail_symbol.borrow().clone() else {
             return;
         };
-        let Some(q) = self.quotes.borrow().snapshot().quotes.get(&id).cloned() else {
+        let Some(q) = self.quotes.borrow().snapshot_ref().quotes.get(&id).cloned() else {
             return;
         };
-        let s = self.settings.borrow().clone();
+        let source = self.settings.borrow().source;
+        let trade_interval = self.trade_refresh_interval();
         for trades in [false, true] {
             let lane = if trades { &self.trades } else { &self.details };
             let daily = !trades && self.daily.get();
-            lane.borrow_mut().select(Some(q.clone()), s.source, daily);
-            let recent_seconds = if self.replay.is_some() || is_trading_time(beijing_now()) {
-                s.trade_refresh_seconds
-            } else {
-                30
-            };
+            lane.borrow_mut().select(Some(q.clone()), source, daily);
             let r = lane.borrow_mut().begin_refresh(
                 force,
                 self.start.elapsed(),
-                trades.then_some(Duration::from_secs(recent_seconds as u64)),
+                trades.then_some(trade_interval),
             );
             if let Some(r) = r {
                 if let Some(replay) = &self.replay {
@@ -1051,7 +1055,8 @@ impl App {
         let Some(id) = self.detail_symbol.borrow().clone() else {
             return;
         };
-        let snap = self.quotes.borrow().snapshot();
+        let quotes = self.quotes.borrow();
+        let snap = quotes.snapshot_ref();
         let fresh = snap.fresh_symbols.contains(&id);
         let Some(q) = snap.quotes.get(&id) else {
             return;
@@ -1152,7 +1157,11 @@ impl App {
             d.set_average_price(slint::SharedString::default());
             d.set_chart(slint::Image::default());
         }
-        let recent = self.trades.borrow().snapshot(self.start.elapsed(), None);
+        let trade_interval = self.trade_refresh_interval();
+        let recent = self
+            .trades
+            .borrow()
+            .snapshot(self.start.elapsed(), Some(trade_interval));
         let ticks = recent
             .data
             .as_ref()
@@ -1161,7 +1170,7 @@ impl App {
         let s = self.settings.borrow();
         let mut rows = Vec::new();
         if !ticks.is_empty() {
-            d.set_trades_title(format!("分笔成交 · {}s", s.trade_refresh_seconds).into());
+            d.set_trades_title(format!("分笔成交 · {}s", trade_interval.as_secs()).into());
             let mut ticks = ticks.iter().collect::<Vec<_>>();
             ticks.sort_by(|a, b| b.time.cmp(&a.time));
             for t in ticks.into_iter().take(TRADE_ROW_COUNT) {

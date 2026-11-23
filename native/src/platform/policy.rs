@@ -1,3 +1,4 @@
+use crate::model::is_valid_shortcut;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,7 +33,7 @@ impl Hotkeys {
         mut register: impl FnMut(i32, u32) -> bool,
         mut unregister: impl FnMut(i32),
     ) -> Result<(), String> {
-        if !valid_shortcut(toggle) || !valid_shortcut(refresh) {
+        if !is_valid_shortcut(toggle) || !is_valid_shortcut(refresh) {
             return Err("快捷键无效；普通按键需 Ctrl 或 Alt，导航及取消键不能注册。".into());
         }
         if toggle != 0 && toggle == refresh {
@@ -97,20 +98,6 @@ impl Hotkeys {
         self.toggle = 0;
         self.refresh = 0;
     }
-}
-
-pub fn valid_shortcut(value: u32) -> bool {
-    if value == 0 {
-        return true;
-    }
-    if value & !0x0007ffff != 0 {
-        return false;
-    }
-    let key = value & 0xffff;
-    let known = matches!(key, 0x03 | 0x0c | 0x0d | 0x13..=0x15 | 0x17..=0x19 | 0x1c..=0x2d |
-        0x2f..=0x39 | 0x41..=0x5d | 0x5f..=0x87 | 0x90..=0x91 | 0xa6..=0xb7 |
-        0xba..=0xc0 | 0xdb..=0xdf | 0xe2 | 0xe5 | 0xe7 | 0xf6..=0xfe);
-    known && ((0x70..=0x87).contains(&key) || value & 0x60000 != 0)
 }
 
 pub fn resize_hit_test(x: i32, y: i32, width: i32, height: i32, edge: i32) -> i32 {

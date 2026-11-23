@@ -306,6 +306,7 @@ async fn aliases_are_removed_before_batching_and_empty_or_invalid_never_request(
 fn bad_duplicate_overflowed_rows_cannot_pollute_other_quotes() {
     let body = line("sh600000", "溢出", "79228162514264337593543950335", "0.01")
         .replace("~2.60~", "~-~")
+        + &line("sh600000", "错配代码", "9", "9").replace("~600000~", "~600519~")
         + &line("sz000001", "平安银行", "0", "12.30")
         + &line("sz000001", "平安银行", "12.50", "12.30");
     let map = HashMap::from([
@@ -432,6 +433,17 @@ fn page(code: &str, n: usize, rows: &str) -> String {
     format!("v_detail_data_{code}=[{n},\"{rows}\"];")
 }
 const RANGES: &str = "09:25:00~09:33:24|09:33:27~14:18:45|14:18:48~14:20:15";
+#[test]
+fn tencent_same_second_trades_keep_the_latest_sequence_numbers() {
+    let rows = (1..=25)
+        .map(|sequence| format!("{sequence}/14:20:15/10/0/{sequence}/0/B"))
+        .collect::<Vec<_>>()
+        .join("|");
+    let trades =
+        details::parse_recent_page(&[json!(0), json!(rows)], 0, chrono::NaiveTime::MIN).unwrap();
+    let lots: Vec<_> = trades.iter().map(|trade| trade.volume_lots).collect();
+    assert_eq!(lots, (6..=25).rev().map(Decimal::from).collect::<Vec<_>>());
+}
 #[tokio::test]
 async fn recent_trades_fixed_two_http_exact_tail_units_and_direction() {
     let rows = "140/14:20:09/10.70/0.01/2/2140/B|141/14:20:12/10.69/-0.01/3/3207/S|142/14:20:15/10.70/0.01/5/5350/M|bad|143/14:20:18/NaN/0/10/100/B";

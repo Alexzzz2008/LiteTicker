@@ -1,3 +1,5 @@
+use liteticker_native::model;
+
 #[allow(dead_code)]
 #[path = "../src/platform/policy.rs"]
 mod policy;
@@ -63,6 +65,8 @@ fn v105_shortcut_navigation_and_numeric_contract_is_preserved() {
         0x2001b,
         0x20008,
         0x2002e,
+        0x2005b,
+        0x2005c,
         u32::MAX,
         0x2ffff,
     ] {

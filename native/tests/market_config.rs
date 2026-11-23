@@ -161,6 +161,13 @@ fn settings_are_atomic_backed_up_and_do_not_import_legacy_files() {
     store.save(&settings).unwrap();
     assert_eq!(store.load().unwrap(), settings);
     assert_eq!(fs::read(dir.0.join("settings.json.bak")).unwrap(), first);
+    store.save(&settings).unwrap();
+    assert_eq!(fs::read(dir.0.join("settings.json.bak")).unwrap(), first);
+    let second = fs::read(store.file_path()).unwrap();
+    settings.x += 1;
+    store.save(&settings).unwrap();
+    assert_eq!(store.load().unwrap(), settings);
+    assert_eq!(fs::read(dir.0.join("settings.json.bak")).unwrap(), second);
     let mut copy = settings.clone();
     copy.symbols.clear();
     assert_eq!(settings.symbols.len(), 2);
@@ -179,6 +186,22 @@ fn settings_are_atomic_backed_up_and_do_not_import_legacy_files() {
     assert!(store.load().is_err());
     assert_eq!(fs::read_to_string(store.file_path()).unwrap(), "{broken");
 }
+
+#[test]
+fn oversized_save_preserves_last_readable_configuration() {
+    let dir = Temporary::new();
+    let store = SettingsStore::new(&dir.0);
+    let saved = AppSettings::default();
+    store.save(&saved).unwrap();
+    let oversized = AppSettings {
+        symbols: vec!["600519.SH".into(); 200_000],
+        ..saved.clone()
+    };
+    assert!(store.save(&oversized).is_err());
+    assert_eq!(store.load().unwrap(), saved);
+    assert!(!dir.0.join("settings.json.bak").exists());
+}
+
 #[test]
 fn invalid_new_settings_fall_back_independently_without_erasing_other_fields() {
     let dir = Temporary::new();

@@ -299,13 +299,17 @@ fn json_object(text: &str) -> Result<serde_json::Value> {
     Ok(value)
 }
 fn number(value: &serde_json::Value) -> Option<rust_decimal::Decimal> {
-    use std::str::FromStr;
-    let text = value
-        .as_str()
-        .map(str::to_owned)
-        .unwrap_or_else(|| value.to_string());
-    rust_decimal::Decimal::from_str(text.trim())
-        .or_else(|_| rust_decimal::Decimal::from_scientific(text.trim()))
+    match value {
+        serde_json::Value::String(value) => decimal(value),
+        serde_json::Value::Number(value) => decimal(value.as_str()),
+        _ => None,
+    }
+}
+fn decimal(value: &str) -> Option<rust_decimal::Decimal> {
+    let value = value.trim();
+    value
+        .parse()
+        .or_else(|_| rust_decimal::Decimal::from_scientific(value))
         .ok()
 }
 fn text(value: &serde_json::Value) -> String {

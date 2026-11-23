@@ -1,8 +1,7 @@
-use super::{number, text};
+use super::{decimal, number, text};
 use crate::model::{DailyBar, MarketSource, MinutePoint, TradeTick, beijing_now};
 use anyhow::{Context, Result, bail};
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime, Timelike};
-use regex::Regex;
 use rust_decimal::Decimal;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -158,15 +157,14 @@ pub(super) fn parse_daily(
     Ok(sorted.into_values().skip(skip).collect())
 }
 pub(super) fn tencent_array(text: &str, variable: &str) -> Result<Vec<Value>> {
-    let regex = Regex::new(&format!(
-        r"(?s)^\s*{}\s*=\s*(\[.*\])\s*;?\s*$",
-        regex::escape(variable)
-    ))?;
-    let assignment = regex
-        .captures(text)
+    let (_, payload) = text
+        .split_once('=')
+        .filter(|(name, _)| name.trim() == variable)
         .context("腾讯近期成交证券变量或响应格式不匹配。")?;
+    let payload = payload.trim_end();
+    let payload = payload.strip_suffix(';').unwrap_or(payload).trim();
     let values: Vec<Value> =
-        serde_json::from_str(&assignment[1]).context("腾讯近期成交返回了无效数据。")?;
+        serde_json::from_str(payload).context("腾讯近期成交返回了无效数据。")?;
     if values.len() != 2 || !values[1].is_string() {
         bail!("腾讯近期成交响应结构无效。");
     }
@@ -263,7 +261,8 @@ pub(super) fn parse_recent_page(
     if parsed.is_empty() {
         bail!("腾讯近期成交末页为空、损坏或时间区间不匹配。");
     }
-    Ok(latest(parsed.into_values().collect()))
+    // Within one second, larger sequence numbers identify newer trades.
+    Ok(latest(parsed.into_values().rev().collect()))
 }
 pub(super) fn parse_em_trades(payload: &Value, symbol: &str) -> Result<Vec<TradeTick>> {
     if !payload["rc"].is_null() && number(&payload["rc"]) != Some(Decimal::ZERO) {
@@ -328,7 +327,4 @@ fn trade_time(value: &str) -> Option<NaiveTime> {
         return None;
     }
     NaiveTime::parse_from_str(value, "%H:%M:%S").ok()
-}
-fn decimal(value: &str) -> Option<Decimal> {
-    number(&Value::String(value.into()))
 }

@@ -107,14 +107,14 @@ fn defer(id: usize, action: Action) {
                     }
                 }
                 Action::Activate | Action::RefreshVisible => {
+                    if unsafe { IsWindowVisible(dispatch.hwnd) } == 0 {
+                        // Restoring the main window already activates it and refreshes quotes.
+                        (dispatch.callback)(DesktopCommand::ToggleVisibility);
+                        return;
+                    }
                     unsafe {
-                        if IsWindowVisible(dispatch.hwnd) == 0 {
-                            (dispatch.callback)(DesktopCommand::ToggleVisibility);
-                        }
-                        if dispatch.alive.get() {
-                            ShowWindow(dispatch.hwnd, SW_RESTORE);
-                            SetForegroundWindow(dispatch.hwnd);
-                        }
+                        ShowWindow(dispatch.hwnd, SW_RESTORE);
+                        SetForegroundWindow(dispatch.hwnd);
                     }
                     if dispatch.alive.get() && matches!(action, Action::RefreshVisible) {
                         (dispatch.callback)(DesktopCommand::Refresh);

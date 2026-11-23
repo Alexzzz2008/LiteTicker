@@ -771,7 +771,9 @@ pub fn start(app: Rc<App>, out: PathBuf) -> Result<Timer> {
                             settings.always_on_top = true;
                             app.save(settings)?;
                         }
+                        let ticks_before_settings = app.tick.get();
                         app.command("settings");
+                        ensure!(app.tick.get() == ticks_before_settings, "主窗可见时打开设置触发了行情刷新");
                     }
                 }
                 3 => {

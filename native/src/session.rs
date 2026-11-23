@@ -52,6 +52,9 @@ impl QuoteSession {
     pub fn snapshot(&self) -> QuoteSnapshot {
         self.snapshot.clone()
     }
+    pub fn snapshot_ref(&self) -> &QuoteSnapshot {
+        &self.snapshot
+    }
     pub fn update_settings(&mut self, value: AppSettings) {
         if self.disposed {
             return;
@@ -157,6 +160,7 @@ pub struct DetailKey {
 pub struct DetailsRequest {
     pub id: u64,
     pub generation: u64,
+    started_at: Duration,
     pub quote: Arc<Quote>,
     pub key: DetailKey,
     pub cancellation: CancellationToken,
@@ -170,7 +174,8 @@ pub struct DetailsSnapshot {
 struct Entry {
     data: Option<Arc<MarketDetails>>,
     error: Option<String>,
-    at: Duration,
+    started_at: Duration,
+    received_at: Duration,
     serial: u64,
 }
 pub struct DetailsSession {
@@ -232,7 +237,7 @@ impl DetailsSession {
                 data: entry.data.clone(),
                 error: entry.error.clone(),
                 stale: entry.error.is_some()
-                    || now.saturating_sub(entry.at) >= self.interval(interval),
+                    || now.saturating_sub(entry.received_at) >= self.interval(interval),
             }
         } else {
             DetailsSnapshot::default()
@@ -248,19 +253,23 @@ impl DetailsSession {
             return None;
         }
         let key = self.key.clone()?;
-        if !force
-            && self
-                .cache
-                .get(&key)
-                .is_some_and(|entry| now.saturating_sub(entry.at) < self.interval(interval))
-        {
-            return None;
+        if !force && let Some(entry) = self.cache.get(&key) {
+            // Pace trade polling from dispatch, but give a received chart its full cache lifetime.
+            let since = if interval.is_some() {
+                entry.started_at
+            } else {
+                entry.received_at
+            };
+            if now.saturating_sub(since) < self.interval(interval) {
+                return None;
+            }
         }
         let quote = self.quote.clone()?;
         self.serial = self.serial.wrapping_add(1);
         let request = DetailsRequest {
             id: self.serial,
             generation: self.generation,
+            started_at: now,
             quote,
             key,
             cancellation: CancellationToken::new(),
@@ -324,7 +333,7 @@ impl DetailsSession {
             if let Some(key) = self
                 .cache
                 .iter()
-                .min_by_key(|(_, entry)| (entry.at, entry.serial))
+                .min_by_key(|(_, entry)| (entry.received_at, entry.serial))
                 .map(|(key, _)| key.clone())
             {
                 self.cache.remove(&key);
@@ -335,7 +344,8 @@ impl DetailsSession {
             Entry {
                 data,
                 error,
-                at: now,
+                started_at: request.started_at,
+                received_at: now,
                 serial: request.id,
             },
         );
@@ -444,6 +454,44 @@ mod tests {
         assert!(session.begin_refresh().is_none());
     }
     #[test]
+    fn trade_refresh_interval_counts_from_dispatch_and_freshness_from_receipt() {
+        let mut session = DetailsSession::new();
+        let stock = Arc::new(quote("600000.SH", 10));
+        session.select(Some(stock.clone()), MarketSource::Tencent, false);
+        let interval = Some(Duration::from_secs(3));
+        let request = session
+            .begin_refresh(false, Duration::ZERO, interval)
+            .unwrap();
+        session.complete(
+            &request,
+            Ok(MarketDetails {
+                symbol: stock.symbol.clone(),
+                ..Default::default()
+            }),
+            Duration::from_millis(400),
+        );
+
+        assert!(
+            session
+                .begin_refresh(false, Duration::from_secs(2), interval)
+                .is_none()
+        );
+        let next_tick = Duration::from_secs(3);
+        assert!(!session.snapshot(next_tick, interval).stale);
+        assert!(session.begin_refresh(false, next_tick, interval).is_some());
+        assert!(
+            session
+                .snapshot(Duration::from_millis(3400), interval)
+                .stale
+        );
+        assert!(
+            session
+                .begin_refresh(false, Duration::from_secs(6), interval)
+                .is_none()
+        );
+    }
+
+    #[test]
     fn detail_mode_cache_and_source_identity_remain_separate() {
         let mut session = DetailsSession::new();
         let stock = Arc::new(quote("600000.SH", 10));
@@ -491,17 +539,17 @@ mod tests {
                 symbol: stock.symbol.clone(),
                 ..MarketDetails::default()
             }),
-            Duration::from_secs(5),
+            Duration::from_secs(7),
         );
         assert!(
             session
-                .begin_refresh(false, Duration::from_secs(64), None)
+                .begin_refresh(false, Duration::from_secs(65), None)
                 .is_none()
         );
         session.select(Some(stock), MarketSource::Eastmoney, true);
         assert!(
             session
-                .snapshot(Duration::from_secs(64), None)
+                .snapshot(Duration::from_secs(65), None)
                 .data
                 .is_none()
         );
