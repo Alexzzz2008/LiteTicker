@@ -191,6 +191,27 @@ async fn tencent_gbk_units_depth_and_prefixes_use_one_batch() {
     assert_eq!(rows[0].timestamp, "20261116113000");
 }
 #[tokio::test]
+async fn older_quote_within_batch_cannot_replace_newer_duplicate() {
+    let fresh = line("sh600000", "浦发银行", "10.67", "10.40");
+    let older =
+        line("sh600000", "浦发银行", "10.60", "10.40").replace("20261116113000", "20261115150000");
+    let same_second = line("sh600000", "浦发银行", "10.68", "10.40");
+    let server = Server::new(vec![Reply::gbk(&(fresh + &same_second + &older))]);
+    let rows = server
+        .client()
+        .fetch_quotes(
+            &["600000.SH".into()],
+            MarketSource::Tencent,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].price, d("10.68"));
+    assert_eq!(rows[0].timestamp, "20261116113000");
+}
+
+#[tokio::test]
 async fn em_units_suspension_bad_rows_and_timestamp_match_v105() {
     let payload = r#"{"data":{"diff":[{"f12":"600000","f13":1,"f14":"浦发银行","f2":10.67,"f18":10.40,"f3":2.60,"f5":1234,"f6":8002500,"f124":1794799800},{"f12":"159915","f13":0,"f14":"创业板ETF","f2":0,"f18":2.15,"f3":"-","f5":"-","f6":"-"},{"f12":"920001","f13":0,"f14":"坏行","f2":"NaN","f18":10}]}}"#;
     let server = Server::new(vec![Reply::utf8(payload)]);

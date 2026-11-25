@@ -100,6 +100,12 @@ impl MarketClient {
             match parsed {
                 Ok(rows) => {
                     for quote in rows {
+                        if result
+                            .get(&quote.symbol)
+                            .is_some_and(|old| quote.is_older_than(old))
+                        {
+                            continue;
+                        }
                         result.insert(quote.symbol.clone(), quote);
                     }
                 }

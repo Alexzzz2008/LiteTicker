@@ -89,6 +89,18 @@ pub struct Quote {
     pub asks: Vec<DepthLevel>,
 }
 
+impl Quote {
+    pub(crate) fn is_older_than(&self, previous: &Self) -> bool {
+        // Full provider timestamps sort chronologically. Replays may omit them or use dates alone.
+        self.timestamp < previous.timestamp
+            && [&self.timestamp, &previous.timestamp]
+                .into_iter()
+                .all(|ts| {
+                    ts.len() == 14 && NaiveDateTime::parse_from_str(ts, "%Y%m%d%H%M%S").is_ok()
+                })
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "PascalCase")]
 pub struct DepthLevel {

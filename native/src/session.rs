@@ -114,6 +114,14 @@ impl QuoteSession {
                     if quote.price <= Decimal::ZERO || !request.symbols.contains(&quote.symbol) {
                         continue;
                     }
+                    if self
+                        .snapshot
+                        .quotes
+                        .get(&quote.symbol)
+                        .is_some_and(|old| quote.is_older_than(old))
+                    {
+                        continue;
+                    }
                     self.snapshot.fresh_symbols.insert(quote.symbol.clone());
                     self.snapshot
                         .quotes
@@ -414,6 +422,44 @@ mod tests {
         assert!(failed.fresh_symbols.is_empty());
         assert_eq!(failed.last_success, Some(now()));
     }
+    #[test]
+    fn older_quote_keeps_cached_data_while_other_symbols_refresh() {
+        let mut session = QuoteSession::new(settings());
+        let at = |symbol, price, timestamp: &str| Quote {
+            timestamp: timestamp.to_owned(),
+            ..quote(symbol, price)
+        };
+        let latest = at("600000.SH", 11, "20261125093505");
+        let first = session.begin_refresh().unwrap();
+        session.complete(&first, Ok(vec![latest.clone()]), now());
+
+        let next = session.begin_refresh().unwrap();
+        let other = at("000001.SZ", 20, "20261125093506");
+        let older = at("600000.SH", 10, "20261125093502");
+        session.complete(&next, Ok(vec![older.clone(), other]), now());
+        let snap = session.snapshot_ref();
+        assert_eq!(snap.quotes["600000.SH"].as_ref(), &latest);
+        assert_eq!(snap.fresh_symbols, HashSet::from(["000001.SZ".into()]));
+        assert!(snap.error.is_some());
+
+        let next = session.begin_refresh().unwrap();
+        session.complete(&next, Ok(vec![older]), now() + chrono::Duration::seconds(1));
+        let snap = session.snapshot_ref();
+        assert!(snap.fresh_symbols.is_empty());
+        assert_eq!(snap.last_success, Some(now()));
+
+        for timestamp in ["20261125093505", "20261125", "", "20261126093000"] {
+            let next = session.begin_refresh().unwrap();
+            let updated = at("600000.SH", 12, timestamp);
+            session.complete(&next, Ok(vec![updated.clone()]), now());
+            assert_eq!(
+                session.snapshot_ref().quotes["600000.SH"].as_ref(),
+                &updated
+            );
+            assert!(session.snapshot_ref().fresh_symbols.contains("600000.SH"));
+        }
+    }
+
     #[test]
     fn source_switch_cancels_in_flight_and_never_commits_old_source() {
         let mut session = QuoteSession::new(settings());
