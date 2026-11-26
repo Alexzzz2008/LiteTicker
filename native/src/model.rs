@@ -217,6 +217,21 @@ pub fn move_symbol(symbols: &mut [String], symbol: &str, direction: i32) -> bool
     symbols.swap(index, target as usize);
     true
 }
+pub enum WatchlistEnd {
+    Top,
+    Bottom,
+}
+pub fn move_symbol_to_end(symbols: &mut [String], symbol: &str, end: WatchlistEnd) -> bool {
+    let Some(index) = symbols.iter().position(|s| s == symbol) else {
+        return false;
+    };
+    match end {
+        WatchlistEnd::Top if index > 0 => symbols[..=index].rotate_right(1),
+        WatchlistEnd::Bottom if index + 1 < symbols.len() => symbols[index..].rotate_left(1),
+        _ => return false,
+    }
+    true
+}
 fn fixed(value: Decimal, places: u32) -> String {
     format!(
         "{:.*}",

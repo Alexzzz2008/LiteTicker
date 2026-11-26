@@ -13,6 +13,8 @@ pub enum DesktopCommand {
     RemoveSelected,
     MoveUp,
     MoveDown,
+    MoveToTop,
+    MoveToBottom,
     Exit,
 }
 

@@ -395,11 +395,11 @@ impl App {
             .on_cancel_hover(|| with_app(|a| a.cancel_hover()));
         self.window
             .on_key_action(|key| with_app(|a| a.command(&key)));
-        self.window.on_context(|_| {
+        #[cfg(windows)]
+        self.window.on_context(|row| {
             with_app(|a| {
-                #[cfg(windows)]
                 if let Some(p) = a.platform.borrow().as_ref() {
-                    p.show_quote_menu(a.selection.borrow().is_some());
+                    p.show_quote_menu(row, a.rows.row_count());
                 }
             })
         });
@@ -689,14 +689,24 @@ impl App {
                     self.show_depth(&id, true);
                 }
             }
-            "up" | "down" | "delete" => {
+            "up" | "down" | "top" | "bottom" | "delete" => {
                 let Some(id) = self.selection.borrow().clone() else {
                     return;
                 };
                 let mut s = self.settings.borrow().clone();
-                if cmd == "delete" {
-                    s.symbols.retain(|v| v != &id);
-                } else if !move_symbol(&mut s.symbols, &id, if cmd == "up" { -1 } else { 1 }) {
+                let changed = match cmd {
+                    "delete" => {
+                        let before = s.symbols.len();
+                        s.symbols.retain(|symbol| symbol != &id);
+                        s.symbols.len() != before
+                    }
+                    "top" => move_symbol_to_end(&mut s.symbols, &id, WatchlistEnd::Top),
+                    "bottom" => move_symbol_to_end(&mut s.symbols, &id, WatchlistEnd::Bottom),
+                    "up" => move_symbol(&mut s.symbols, &id, -1),
+                    "down" => move_symbol(&mut s.symbols, &id, 1),
+                    _ => unreachable!(),
+                };
+                if !changed {
                     return;
                 }
                 if let Err(e) = self.save(s) {
@@ -755,6 +765,8 @@ impl App {
             RemoveSelected => "delete",
             MoveUp => "up",
             MoveDown => "down",
+            MoveToTop => "top",
+            MoveToBottom => "bottom",
             Exit => "exit",
         })
     }

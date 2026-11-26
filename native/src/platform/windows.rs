@@ -340,9 +340,9 @@ impl DesktopPlatform {
         Ok(())
     }
     /// Post first: TrackPopupMenu must never nest inside a Slint input callback.
-    pub fn show_quote_menu(&self, has_selection: bool) {
+    pub fn show_quote_menu(&self, row: i32, row_count: usize) {
         unsafe {
-            PostMessageW(self.state.hwnd, OPEN_MENU, usize::from(has_selection), 0);
+            PostMessageW(self.state.hwnd, OPEN_MENU, row_count, row as isize);
         }
     }
     pub fn start_drag(&self) {
@@ -425,7 +425,7 @@ impl NativeState {
         }
         true
     }
-    fn menu(&self, tray: bool, selection: bool) {
+    fn menu(&self, quote_row: Option<(isize, usize)>) {
         let menu = unsafe { CreatePopupMenu() };
         if menu.is_null() {
             return;
@@ -439,11 +439,12 @@ impl NativeState {
             }
         }
         let _menu = OwnedMenu(menu);
-        let ids: &[u32] = if tray {
-            &[10, 2, 13, 11, 0, 12]
-        } else {
-            &[1, 2, 3, 4, 5, 0, 6, 7, 8, 9]
+        let ids: &[u32] = match quote_row {
+            Some(_) => &[1, 2, 3, 4, 5, 14, 15, 0, 6, 7, 8, 9],
+            None => &[10, 2, 13, 11, 0, 12],
         };
+        let (row, count) = quote_row.unwrap_or((-1, 0));
+        let selected = usize::try_from(row).ok().filter(|&i| i < count);
         unsafe {
             let info = MENUINFO {
                 cbSize: size_of::<MENUINFO>() as u32,
@@ -454,7 +455,12 @@ impl NativeState {
             SetMenuInfo(menu, &info);
             for id in ids {
                 let mut label = wide(menu_label(*id));
-                let disabled = matches!(id, 1 | 3 | 4 | 5) && !selection;
+                let disabled = match id {
+                    1 | 3 => selected.is_none(),
+                    4 | 14 => selected.is_none_or(|i| i == 0),
+                    5 | 15 => selected.is_none_or(|i| i + 1 == count),
+                    _ => false,
+                };
                 let item = MENUITEMINFOW {
                     cbSize: size_of::<MENUITEMINFOW>() as u32,
                     fMask: MIIM_ID | MIIM_FTYPE | MIIM_STRING | MIIM_DATA | MIIM_STATE,
@@ -539,7 +545,7 @@ unsafe extern "system" fn subclass(
                 return 0;
             }
             OPEN_MENU => {
-                state.menu(false, wp != 0);
+                state.menu(Some((lp, wp)));
                 return 0;
             }
             TRAY => {
@@ -547,7 +553,7 @@ unsafe extern "system" fn subclass(
                     NIN_BALLOONUSERCLICK => {
                         defer(state.id, Action::Command(DesktopCommand::ShowUpdates))
                     }
-                    WM_CONTEXTMENU | WM_RBUTTONUP => state.menu(true, false),
+                    WM_CONTEXTMENU | WM_RBUTTONUP => state.menu(None),
                     WM_LBUTTONDBLCLK | NIN_KEYSELECT => defer(state.id, Action::Activate),
                     _ => {}
                 }
@@ -665,6 +671,8 @@ fn menu_label(id: u32) -> &'static str {
         3 => "删除选中",
         4 => "上移",
         5 => "下移",
+        14 => "置顶",
+        15 => "置底",
         6 => "设置",
         7 => "更新行情 (F5)",
         8 => "隐藏到托盘",
@@ -683,6 +691,8 @@ fn menu_command(id: u32) -> Option<DesktopCommand> {
         3 => DesktopCommand::RemoveSelected,
         4 => DesktopCommand::MoveUp,
         5 => DesktopCommand::MoveDown,
+        14 => DesktopCommand::MoveToTop,
+        15 => DesktopCommand::MoveToBottom,
         6 | 13 => DesktopCommand::ShowSettings,
         7 => DesktopCommand::Refresh,
         8 => DesktopCommand::ToggleVisibility,

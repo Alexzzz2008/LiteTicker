@@ -68,6 +68,47 @@ fn symbols_preserve_markets_ascii_and_order() {
     assert!(parse_symbols("600519 bad").is_err());
 }
 #[test]
+fn watchlist_ends_preserve_other_stocks_and_saved_order() {
+    let dir = Temporary::new();
+    let store = SettingsStore::new(&dir.0);
+    let mut settings = AppSettings {
+        symbols: parse_symbols("600519 000001.SZ 920001 000001.SH").unwrap(),
+        ..Default::default()
+    };
+    for (end, expected) in [
+        (
+            WatchlistEnd::Top,
+            ["920001.BJ", "600519.SH", "000001.SZ", "000001.SH"],
+        ),
+        (
+            WatchlistEnd::Bottom,
+            ["600519.SH", "000001.SZ", "000001.SH", "920001.BJ"],
+        ),
+    ] {
+        assert!(move_symbol_to_end(&mut settings.symbols, "920001.BJ", end));
+        assert_eq!(settings.symbols, expected);
+        store.save(&settings).unwrap();
+        settings = SettingsStore::new(&dir.0).load().unwrap();
+        assert_eq!(settings.symbols, expected);
+    }
+}
+#[test]
+fn watchlist_ends_ignore_missing_stocks_and_existing_boundaries() {
+    for (raw, symbol, end) in [
+        ("", "600519.SH", WatchlistEnd::Top),
+        ("600519", "600519.SH", WatchlistEnd::Top),
+        ("600519", "600519.SH", WatchlistEnd::Bottom),
+        ("600519 000001.SZ", "920001.BJ", WatchlistEnd::Bottom),
+        ("600519 000001.SZ", "600519.SH", WatchlistEnd::Top),
+        ("600519 000001.SZ", "000001.SZ", WatchlistEnd::Bottom),
+    ] {
+        let original = parse_symbols(raw).unwrap();
+        let mut symbols = original.clone();
+        assert!(!move_symbol_to_end(&mut symbols, symbol, end));
+        assert_eq!(symbols, original);
+    }
+}
+#[test]
 fn display_precision_units_and_overflow_match_v105() {
     for (n, want) in [
         ("9.24", "9.24"),
