@@ -19,20 +19,21 @@ pub(super) fn parse_minutes(
     code: &str,
     source: MarketSource,
 ) -> Result<Vec<MinutePoint>> {
-    let rows = if source == MarketSource::Tencent {
-        &payload["data"][code]["data"]["data"]
+    let tencent = source == MarketSource::Tencent;
+    let (rows, tencent_index) = if tencent {
+        let security = &payload["data"][code];
+        (&security["data"]["data"], security["qt"][code][61] == "ZS")
     } else {
-        &em_data(payload, symbol)?["trends"]
+        (&em_data(payload, symbol)?["trends"], false)
     };
     let mut sorted = BTreeMap::new();
     for row in rows.as_array().into_iter().flatten() {
         let row = text(row);
-        let fields: Vec<&str> = if source == MarketSource::Tencent {
+        let fields: Vec<&str> = if tencent {
             row.split_whitespace().collect()
         } else {
             row.split(',').collect()
         };
-        let tencent = source == MarketSource::Tencent;
         if fields.len() < if tencent { 3 } else { 6 } {
             continue;
         }
@@ -62,7 +63,10 @@ pub(super) fn parse_minutes(
         if price <= Decimal::ZERO || volume < Decimal::ZERO {
             continue;
         }
-        let average = if tencent {
+        let average = if tencent_index {
+            // Index turnover is in yuan; dividing by shares cannot produce index points.
+            None
+        } else if tencent {
             fields
                 .get(3)
                 .and_then(|amount| decimal(amount))
@@ -88,7 +92,7 @@ pub(super) fn parse_minutes(
     Ok(sorted
         .into_values()
         .map(|mut p| {
-            if source == MarketSource::Tencent {
+            if tencent {
                 let cumulative = p.volume_lots;
                 p.volume_lots = cumulative
                     .checked_sub(previous)

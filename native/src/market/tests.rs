@@ -340,6 +340,51 @@ fn bad_duplicate_overflowed_rows_cannot_pollute_other_quotes() {
     assert_eq!(parsed[1].price, d("12.50"));
 }
 #[test]
+fn tencent_index_points_do_not_use_constituent_turnover_as_an_average() {
+    let parse = |symbol: &str, code: &str, kind: &str, rows: &[&str]| {
+        let mut quote_fields = vec![""; 62];
+        quote_fields[61] = kind;
+        let payload = json!({"data": {(code): {
+            "qt": {(code): quote_fields},
+            "data": {"data": rows}
+        }}});
+        details::parse_minutes(&payload, symbol, code, MarketSource::Tencent).unwrap()
+    };
+    let index = parse(
+        "000001.SH",
+        "sh000001",
+        "ZS",
+        &[
+            "0930 3490.14 4730979 5408591854.20",
+            "0931 3485.92 22438250 27623180891.90",
+        ],
+    );
+    assert_eq!(index.len(), 2);
+    assert_eq!(index[1].price, d("3485.92"));
+    assert_eq!(index[1].volume_lots, d("17707271"));
+    assert!(index.iter().all(|point| point.average.is_zero()));
+
+    let bank = parse(
+        "000001.SZ",
+        "sz000001",
+        "GP-A",
+        &["0930 12 100 120000", "0931 12.20 200 242000"],
+    );
+    assert_eq!(bank[1].average, d("12.10"));
+}
+
+#[test]
+fn eastmoney_index_keeps_the_average_provided_in_points() {
+    let payload = json!({"data":{"code":"000001","trends":[
+        "2026-11-26 09:30,3490.14,3490.14,3490.14,3490.14,4730979,5408591872.00,3504.776"
+    ]}});
+    let minutes =
+        details::parse_minutes(&payload, "000001.SH", "1.000001", MarketSource::Eastmoney).unwrap();
+    assert_eq!(minutes[0].price, d("3490.14"));
+    assert_eq!(minutes[0].average, d("3504.776"));
+}
+
+#[test]
 fn missing_minute_average_does_not_substitute_the_last_price() {
     let tencent = json!({"data":{"sh600000":{"data":{"data":[
         "0930 10 0 0", "0931 10 100", "0932 10 120 0"
