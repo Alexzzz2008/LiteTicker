@@ -3,7 +3,8 @@ mod quotes;
 mod search;
 
 use crate::model::{
-    MarketDetails, MarketSource, Quote, SymbolMatch, beijing_now, normalize_symbol,
+    MarketDetails, MarketSource, Quote, SHANGHAI_COMPOSITE, SymbolMatch, beijing_now,
+    normalize_symbol,
 };
 use anyhow::{Context, Result, bail};
 use encoding_rs::GBK;
@@ -157,15 +158,24 @@ impl MarketClient {
             ),
         };
         let result: Result<bool> = async {
-            let text = self
-                .get_text(&url, source, false, 2 * 1024 * 1024, &token)
-                .await?;
+            let request = self.get_text(&url, source, false, 2 * 1024 * 1024, &token);
+            let (text, leading) = if !daily && symbol == SHANGHAI_COMPOSITE {
+                let (text, leading) = tokio::join!(request, self.fetch_shanghai_leading(&token));
+                (text?, leading)
+            } else {
+                (request.await?, None)
+            };
             let payload = json_object(&text)?;
             if daily {
                 details.daily = details::parse_daily(&payload, &symbol, &code, source)?;
                 Ok(!details.daily.is_empty())
             } else {
                 details.minutes = details::parse_minutes(&payload, &symbol, &code, source)?;
+                if let Some((snapshot, leading)) = leading
+                    && let Some(day) = details::shanghai_session_day(&payload, &code, source)
+                {
+                    details::apply_shanghai_leading(&mut details.minutes, day, &snapshot, &leading);
+                }
                 Ok(!details.minutes.is_empty())
             }
         }
@@ -178,6 +188,31 @@ impl MarketClient {
             Err(error) => Some(format!("{label}请求失败：{error}")),
         };
         Ok(details)
+    }
+    async fn fetch_shanghai_leading(
+        &self,
+        token: &CancellationToken,
+    ) -> Option<(String, serde_json::Value)> {
+        let referer = "https://finance.sina.com.cn/";
+        let snapshot = self.get_with_referer(
+            "https://hq.sinajs.cn/list=sh000001",
+            referer,
+            true,
+            16 * 1024,
+            token,
+        );
+        let minutes = self.get_with_referer(
+            "https://cn.finance.sina.com.cn/minline/getMinlineData?symbol=sh000001&version=7.11.0&dpc=1",
+            referer, false, 256 * 1024, token,
+        );
+        // Keep the optional overlay from holding up the selected provider's price line.
+        let (snapshot, minutes) = tokio::time::timeout(Duration::from_millis(1500), async {
+            tokio::try_join!(snapshot, minutes)
+        })
+        .await
+        .ok()?
+        .ok()?;
+        Some((snapshot, json_object(&minutes).ok()?))
     }
     pub async fn fetch_recent_trades(
         &self,
@@ -228,6 +263,21 @@ impl MarketClient {
         limit: usize,
         token: &CancellationToken,
     ) -> Result<String> {
+        let referer = match source {
+            MarketSource::Tencent => "https://gu.qq.com/",
+            MarketSource::Eastmoney => "https://quote.eastmoney.com/",
+        };
+        self.get_with_referer(url, referer, gbk, limit, token).await
+    }
+
+    async fn get_with_referer(
+        &self,
+        url: &str,
+        referer: &str,
+        gbk: bool,
+        limit: usize,
+        token: &CancellationToken,
+    ) -> Result<String> {
         check_cancelled(token)?;
         #[cfg(test)]
         let rewritten = self.test_origin.as_ref().map(|origin| {
@@ -244,10 +294,6 @@ impl MarketClient {
         #[cfg(test)]
         let url = rewritten.as_deref().unwrap_or(url);
         let request = async {
-            let referer = match source {
-                MarketSource::Tencent => "https://gu.qq.com/",
-                MarketSource::Eastmoney => "https://quote.eastmoney.com/",
-            };
             let mut response = self
                 .http
                 .get(url)

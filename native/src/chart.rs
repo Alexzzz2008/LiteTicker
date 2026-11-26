@@ -1,4 +1,4 @@
-use liteticker_native::model::MarketDetails;
+use liteticker_native::model::{MarketDetails, SHANGHAI_COMPOSITE};
 use rust_decimal::{Decimal, prelude::ToPrimitive};
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
 use tiny_skia::{Color, Paint, PathBuilder, Pixmap, Stroke, Transform};
@@ -68,7 +68,7 @@ pub fn render(
     } else {
         data.minutes
             .iter()
-            .flat_map(|m| [m.price, m.average])
+            .flat_map(|m| [m.price, m.overlay(&data.symbol)])
             .chain([reference])
             .filter(|v| *v > Decimal::ZERO)
             .collect()
@@ -150,18 +150,34 @@ pub fn render(
             );
         }
     } else {
-        for (average, color) in [(false, [220, 220, 222]), (true, [220, 178, 78])] {
-            let points = data.minutes.iter().filter_map(|m| {
-                let v = if average { m.average } else { m.price };
-                if v <= Decimal::ZERO {
-                    return None;
+        for (overlay, color) in [(false, [220, 220, 222]), (true, [220, 178, 78])] {
+            let leading = overlay && data.symbol == SHANGHAI_COMPOSITE;
+            for segment in data
+                .minutes
+                .split(|m| leading && m.leading <= Decimal::ZERO)
+            {
+                let mut points = segment.iter().filter_map(|m| {
+                    let value = if overlay {
+                        m.overlay(&data.symbol)
+                    } else {
+                        m.price
+                    };
+                    if value <= Decimal::ZERO {
+                        return None;
+                    }
+                    Some((
+                        WIDTH as f32 * f32::from(minute_index(&m.time)?) / 240.,
+                        y(value),
+                    ))
+                });
+                if leading && segment.len() == 1 {
+                    if let Some((x, y)) = points.next() {
+                        stroke(&mut pix, [(x - 0.9, y), (x + 0.9, y)], color, 1.8);
+                    }
+                } else {
+                    stroke(&mut pix, points, color, 1.8);
                 }
-                Some((
-                    WIDTH as f32 * f32::from(minute_index(&m.time)?) / 240.,
-                    y(v),
-                ))
-            });
-            stroke(&mut pix, points, color, 1.8);
+            }
         }
     }
     let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(pix.width(), pix.height());
@@ -172,6 +188,55 @@ pub fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use liteticker_native::model::MinutePoint;
+
+    #[test]
+    fn shanghai_chart_uses_leading_points_and_leaves_missing_minutes_blank() {
+        let mut data = MarketDetails {
+            symbol: SHANGHAI_COMPOSITE.into(),
+            ..Default::default()
+        };
+        for (time, leading) in [
+            ("09:30", 3505),
+            ("09:40", 3508),
+            ("09:50", 0),
+            ("10:00", 3506),
+            ("10:10", 3503),
+            ("10:20", 0),
+            ("10:30", 3507),
+        ] {
+            data.minutes.push(MinutePoint {
+                time: time.into(),
+                price: Decimal::from(3500),
+                average: Decimal::from(12),
+                leading: Decimal::from(leading),
+                ..Default::default()
+            });
+        }
+        for legacy in [false, true] {
+            if legacy {
+                for minute in &mut data.minutes {
+                    minute.leading = Decimal::ZERO;
+                }
+            }
+            let (image, labels) = render(&data, false, 3500.into(), 3500.into());
+            assert!(
+                labels[4].parse::<f32>().unwrap() > 3480.,
+                "unrelated average changed the index scale: {labels:?}"
+            );
+            let rgba = image.to_rgba8().unwrap();
+            let gold_at = |x: usize| {
+                (0..HEIGHT as usize).any(|y| {
+                    let p = &rgba.as_bytes()[(y * WIDTH as usize + x) * 4..][..3];
+                    p[0] > 125 && p[0] > p[1] && p[1].saturating_sub(p[2]) > 50
+                })
+            };
+            for x in [18, 130, 225] {
+                assert_eq!(gold_at(x), !legacy, "wrong leading curve at x={x}");
+            }
+            assert!(!gold_at(75), "a line bridged the missing 09:50 value");
+        }
+    }
 
     #[test]
     fn raster_grid_and_price_labels_share_all_five_plot_positions() {

@@ -1081,6 +1081,7 @@ impl App {
         d.set_pinned(self.pinned.get());
         d.set_amount(self.amount.get());
         d.set_daily(self.daily.get());
+        d.set_shanghai_index(id == SHANGHAI_COMPOSITE);
         d.set_has_depth(
             q.asks
                 .iter()
@@ -1140,12 +1141,17 @@ impl App {
             {
                 let (image, axis) =
                     chart::render(data, self.daily.get(), q.previous_close, q.price);
-                let average = data
+                d.set_has_leading(
+                    !self.daily.get()
+                        && data.symbol == SHANGHAI_COMPOSITE
+                        && data.minutes.iter().any(|m| m.leading > Decimal::ZERO),
+                );
+                let overlay = data
                     .minutes
                     .last()
-                    .map(|point| point.average)
+                    .map(|point| point.overlay(&data.symbol))
                     .filter(|price| !self.daily.get() && *price > Decimal::ZERO);
-                d.set_average_price(average.map(format_price).unwrap_or_default().into());
+                d.set_overlay_value(overlay.map(format_price).unwrap_or_default().into());
                 d.set_chart(image);
                 d.set_axis(ModelRc::new(VecModel::from(axis)));
                 d.set_first_date(
@@ -1166,7 +1172,8 @@ impl App {
             }
         } else {
             self.chart_data.take();
-            d.set_average_price(slint::SharedString::default());
+            d.set_has_leading(false);
+            d.set_overlay_value(slint::SharedString::default());
             d.set_chart(slint::Image::default());
         }
         let trade_interval = self.trade_refresh_interval();

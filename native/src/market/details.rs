@@ -50,8 +50,7 @@ pub(super) fn parse_minutes(
         let Some(time) = time else {
             continue;
         };
-        let hm = time.hour() * 100 + time.minute();
-        if !(930..=1500).contains(&hm) || (1130 < hm && hm < 1300) {
+        if !is_session_minute(time) {
             continue;
         }
         let (Some(price), Some(volume)) = (
@@ -85,6 +84,7 @@ pub(super) fn parse_minutes(
                     .filter(|value| *value > Decimal::ZERO)
                     .unwrap_or_default(),
                 volume_lots: volume,
+                leading: Decimal::ZERO,
             },
         );
     }
@@ -104,6 +104,101 @@ pub(super) fn parse_minutes(
         })
         .collect())
 }
+
+fn is_session_minute(time: NaiveTime) -> bool {
+    matches!(time.hour() * 100 + time.minute(), 930..=1130 | 1300..=1500)
+}
+
+pub(super) fn shanghai_session_day(
+    payload: &Value,
+    code: &str,
+    source: MarketSource,
+) -> Option<NaiveDate> {
+    let data = &payload["data"];
+    if source == MarketSource::Tencent {
+        return NaiveDate::parse_from_str(data[code]["data"]["date"].as_str()?, "%Y%m%d").ok();
+    }
+    let (market, symbol) = code.split_once('.')?;
+    if data["code"].as_str() != Some(symbol)
+        || data
+            .get("market")
+            .is_some_and(|value| text(value) != market)
+    {
+        return None;
+    }
+    let mut days = data["trends"].as_array()?.iter().filter_map(|row| {
+        let (timestamp, _) = row.as_str()?.split_once(',')?;
+        let point = NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%d %H:%M").ok()?;
+        is_session_minute(point.time()).then_some(point.date())
+    });
+    let day = days.next()?;
+    days.all(|other| other == day).then_some(day)
+}
+
+fn sina_shanghai_open(snapshot: &str, day: NaiveDate) -> Option<Decimal> {
+    let (variable, value) = snapshot.trim().split_once('=')?;
+    if variable.trim() != "var hq_str_sh000001" {
+        return None;
+    }
+    let value = value.trim();
+    let fields: &str = serde_json::from_str(value.strip_suffix(';').unwrap_or(value)).ok()?;
+    let fields = fields.split(',').collect::<Vec<_>>();
+    let open = decimal(fields.get(1)?)?;
+    let snapshot_day = NaiveDate::parse_from_str(fields.get(30)?, "%Y-%m-%d").ok()?;
+    (snapshot_day == day && open > Decimal::ZERO).then_some(open)
+}
+
+pub(super) fn apply_shanghai_leading(
+    minutes: &mut [MinutePoint],
+    day: NaiveDate,
+    snapshot: &str,
+    payload: &Value,
+) {
+    let result = &payload["result"];
+    if result["status"]["code"].as_i64() != Some(0) {
+        return;
+    }
+    let (Some(open), Some(rows)) = (sina_shanghai_open(snapshot, day), result["data"].as_array())
+    else {
+        return;
+    };
+    let iso_day = day.to_string();
+    let compact_day = day.format("%Y%m%d").to_string();
+    let mut opening_matches = false;
+    let mut leading = BTreeMap::new();
+    for row in rows {
+        for key in ["d", "date"] {
+            if let Some(date) = row.get(key)
+                && date.as_str() != Some(iso_day.as_str())
+                && date.as_str() != Some(compact_day.as_str())
+            {
+                return;
+            }
+        }
+        let Some(time) = row["m"].as_str().and_then(|s| s.strip_suffix(":00")) else {
+            continue;
+        };
+        if time == "09:30" {
+            // Sina's snapshot has four decimals; its opening minute price has three.
+            opening_matches = number(&row["p"])
+                .filter(|price| *price > Decimal::ZERO)
+                .is_some_and(|price| (price - open).abs() <= Decimal::new(5, 4));
+        }
+        if let Some(value) = number(&row["lx"]).filter(|value| *value > Decimal::ZERO) {
+            leading.insert(time, value);
+        }
+    }
+    if !opening_matches {
+        return;
+    }
+    // The primary feed defines the trading minutes on the chart.
+    for point in minutes {
+        if let Some(&value) = leading.get(point.time.as_str()) {
+            point.leading = value;
+        }
+    }
+}
+
 pub(super) fn parse_daily(
     payload: &Value,
     symbol: &str,

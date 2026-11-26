@@ -110,6 +110,8 @@ pub struct DepthLevel {
     pub volume_lots: Decimal,
 }
 
+pub const SHANGHAI_COMPOSITE: &str = "000001.SH";
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "PascalCase")]
 pub struct MinutePoint {
@@ -119,7 +121,19 @@ pub struct MinutePoint {
     #[serde(with = "rust_decimal::serde::arbitrary_precision")]
     pub average: Decimal,
     #[serde(with = "rust_decimal::serde::arbitrary_precision")]
+    pub leading: Decimal,
+    #[serde(with = "rust_decimal::serde::arbitrary_precision")]
     pub volume_lots: Decimal,
+}
+
+impl MinutePoint {
+    pub fn overlay(&self, symbol: &str) -> Decimal {
+        if symbol == SHANGHAI_COMPOSITE {
+            self.leading
+        } else {
+            self.average
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

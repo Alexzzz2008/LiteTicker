@@ -696,7 +696,7 @@ pub fn start(app: Rc<App>, out: PathBuf) -> Result<Timer> {
                     let depth = app.depth.borrow().as_ref().context("悬停未打开盘口")?.clone_strong();
                     ensure!(depth.get_heading().contains(quote.name.as_str()), "盘口名称未跟随鼠标");
                     if quote.symbol != replay.details.symbol {
-                        ensure!(depth.get_average_price().is_empty(), "切换股票后仍残留其他股票的均价");
+                        ensure!(depth.get_overlay_value().is_empty() && !depth.get_has_leading(), "切换证券后仍残留上一标的的分时数据");
                     }
                     if phase == -1 {
                         ensure!(app.selection.borrow().as_deref() == Some(replay.quotes[0].symbol.as_str()), "悬停改变了先前的单击选中行");
@@ -751,9 +751,13 @@ pub fn start(app: Rc<App>, out: PathBuf) -> Result<Timer> {
                         }
                     }
                     if phase == 1 {
-                        let expected = replay.details.minutes.last().map(|m| m.average)
+                        let index = replay.details.symbol == SHANGHAI_COMPOSITE;
+                        let has_leading = index && replay.details.minutes.iter().any(|m| m.leading > Decimal::ZERO);
+                        let expected = replay.details.minutes.last().map(|m| if index { m.leading } else { m.average })
                             .filter(|v| *v > Decimal::ZERO).map(format_price).unwrap_or_default();
-                        ensure!(d.get_average_price().as_str() == expected, "盘口均价与最新分时数据不符");
+                        ensure!(d.get_overlay_value().as_str() == expected, "盘口图例数值与最新分时数据不符");
+                        let legend = d.get_chart_legend();
+                        ensure!(legend.contains("上证领先") == has_leading && legend.contains("均价") != index, "分时图例与标的或数据不符：{legend}");
                         check_numeric_columns(&d)?;
                         check_chart_axis(&d)?;
                         ensure!(d.window().size() == slint::PhysicalSize::new(960, 840), "盘口初始尺寸错误 {:?}", d.window().size());
@@ -762,7 +766,7 @@ pub fn start(app: Rc<App>, out: PathBuf) -> Result<Timer> {
                         d.invoke_command("daily".into());
                     } else {
                         ensure!(d.get_amount() && d.get_daily(), "盘口未切换为金额与日 K");
-                        ensure!(d.get_average_price().is_empty(), "日 K 仍显示分时均价");
+                        ensure!(d.get_overlay_value().is_empty() && d.get_chart_legend() == "日 K", "日 K 仍显示分时图例或数值");
                         capture(d.window(), &out.join("daily.png"))?;
                         d.invoke_command("close".into());
                         #[cfg(windows)]

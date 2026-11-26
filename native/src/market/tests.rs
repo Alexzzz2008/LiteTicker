@@ -73,6 +73,9 @@ struct Server {
 }
 impl Server {
     fn new(replies: Vec<Reply>) -> Self {
+        Self::with_routes(replies.into_iter().map(|reply| ("", reply)).collect())
+    }
+    fn with_routes(mut replies: Vec<(&'static str, Reply)>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let origin = format!("http://{}", listener.local_addr().unwrap());
@@ -81,7 +84,7 @@ impl Server {
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = stop.clone();
         let handle = thread::spawn(move || {
-            for reply in replies {
+            while !replies.is_empty() {
                 let deadline = Instant::now() + Duration::from_secs(7);
                 let mut stream = loop {
                     if stopping.load(Ordering::Relaxed) || Instant::now() > deadline {
@@ -109,10 +112,13 @@ impl Server {
                         Err(_) => break,
                     }
                 }
-                logged
-                    .lock()
-                    .unwrap()
-                    .push(String::from_utf8_lossy(&request).into_owned());
+                let request = String::from_utf8_lossy(&request).into_owned();
+                let index = replies
+                    .iter()
+                    .position(|(path, _)| request.lines().next().unwrap_or_default().contains(path))
+                    .expect("unexpected fixture route");
+                let (_, reply) = replies.remove(index);
+                logged.lock().unwrap().push(request);
                 thread::sleep(reply.delay);
                 let header = format!(
                     "HTTP/1.1 {} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -371,6 +377,153 @@ fn tencent_index_points_do_not_use_constituent_turnover_as_an_average() {
         &["0930 12 100 120000", "0931 12.20 200 242000"],
     );
     assert_eq!(bank[1].average, d("12.10"));
+}
+
+fn shanghai_snapshot(day: &str, open: &str) -> String {
+    let mut fields = vec![""; 33];
+    fields[0] = "上证指数";
+    fields[1] = open;
+    fields[30] = day;
+    fields[31] = "15:00:00";
+    format!(r#"var hq_str_sh000001="{}";"#, fields.join(","))
+}
+
+#[tokio::test]
+async fn shanghai_overlay_joins_matching_minutes_without_replacing_prices_or_averages() {
+    let tencent = json!({"data":{"sh000001":{"data":{"date":"20261126","data":[
+        "0930 3490.14 4730979", "0931 3485.92 22438250", "0932 3488.33 31565773"
+    ]}}}});
+    let eastmoney = json!({"data":{"code":"000001","trends":[
+        "2026-11-26 09:30,3490.14,3490.14,3490.14,3490.14,4730979,5408591872,3504.776",
+        "2026-11-26 09:31,3487.05,3485.92,3487.77,3481.19,17707271,22214588928,3489.388",
+        "2026-11-26 09:32,3487,3488.33,3490,3486,9127523,11810454000,3492"
+    ]}});
+    let sina = json!({"result":{"status":{"code":0},"data":[
+        {"m":"09:32:00","p":"3487.724","lx":"-","avg_p":"3486.923"},
+        {"m":"09:30:00","p":"3490.145","lx":"3506.401","avg_p":"3490.145"},
+        {"m":"09:31:00","p":"3486.088","lx":"3492.102","avg_p":"3486.145"},
+        {"m":"09:33:00","p":"3487.3","lx":"3491.2"}
+    ]}});
+    for (source, path, data) in [
+        (MarketSource::Tencent, "/minute/query", tencent),
+        (MarketSource::Eastmoney, "/stock/trends2/get", eastmoney),
+    ] {
+        let server = Server::with_routes(vec![
+            (path, Reply::utf8(&data.to_string())),
+            ("/minline/getMinlineData", Reply::utf8(&sina.to_string())),
+            (
+                "/list=sh000001",
+                Reply::gbk(&shanghai_snapshot("2026-11-26", "3490.1446")),
+            ),
+        ]);
+        let quote = Quote {
+            symbol: "000001.SH".into(),
+            ..Default::default()
+        };
+        let chart = server
+            .client()
+            .fetch_details(&quote, source, false, CancellationToken::new())
+            .await
+            .unwrap();
+        assert!(chart.error.is_none());
+        assert_eq!(chart.minutes.len(), 3);
+        assert_eq!(chart.minutes[1].price, d("3485.92"));
+        assert_eq!(
+            chart.minutes.iter().map(|p| p.leading).collect::<Vec<_>>(),
+            [d("3506.401"), d("3492.102"), Decimal::ZERO]
+        );
+    }
+}
+
+#[tokio::test]
+async fn shanghai_price_line_survives_an_unavailable_leading_feed() {
+    let chart = json!({"data":{"sh000001":{"data":{"date":"20261126","data":[
+        "0930 3490.14 4730979"
+    ]}}}});
+    let server = Server::with_routes(vec![
+        ("/minute/query", Reply::utf8(&chart.to_string())),
+        ("/minline/getMinlineData", Reply::utf8("null")),
+        (
+            "/list=sh000001",
+            Reply::gbk(&shanghai_snapshot("2026-11-26", "3490.1446")),
+        ),
+    ]);
+    let quote = Quote {
+        symbol: SHANGHAI_COMPOSITE.into(),
+        ..Default::default()
+    };
+    let chart = server
+        .client()
+        .fetch_details(
+            &quote,
+            MarketSource::Tencent,
+            false,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert!(chart.error.is_none());
+    assert_eq!(chart.minutes[0].price, d("3490.14"));
+    assert!(chart.minutes[0].leading.is_zero());
+    let server = Server::new(vec![Reply::utf8(
+        r#"{"data":{"sh000001":{"day":[["2026-11-26","3490.14","3476.88","3497.71","3450.22"]]}}}"#,
+    )]);
+    let chart = server
+        .client()
+        .fetch_details(
+            &quote,
+            MarketSource::Tencent,
+            true,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(chart.daily.len(), 1);
+    assert_eq!(server.requests().len(), 1);
+}
+
+#[test]
+fn shanghai_leading_rejects_stale_batches_and_keeps_legacy_average_separate() {
+    let minute: MinutePoint =
+        serde_json::from_value(json!({"Time":"09:30","Price":3490.14,"Average":11.43})).unwrap();
+    assert_eq!(minute.overlay("000001.SH"), Decimal::ZERO);
+    assert_eq!(minute.overlay("000001.SZ"), d("11.43"));
+    let sina = json!({"result":{"status":{"code":0},"data":[{"m":"09:30:00","p":"3490.145","lx":"3506.401"}]}});
+    let day = chrono::NaiveDate::from_ymd_opt(2026, 11, 26).unwrap();
+    for snapshot in [
+        shanghai_snapshot("2026-11-25", "3490.1446"),
+        shanghai_snapshot("2026-11-26", "3500.2"),
+        shanghai_snapshot("2026-11-26", "3490.1446").replace("sh000001", "sz000001"),
+    ] {
+        let mut points = vec![minute.clone()];
+        details::apply_shanghai_leading(&mut points, day, &snapshot, &sina);
+        assert_eq!(points[0], minute);
+    }
+}
+
+#[test]
+fn shanghai_mixed_session_dates_do_not_produce_a_leading_line() {
+    let data = json!({"data":{"market":1,"code":"000001","trends":[
+        "2026-11-25 09:30,3480,3480,3480,3480,100,348000", "2026-11-26 09:31,3490,3490,3490,3490,200,698000"
+    ]}});
+    assert!(details::shanghai_session_day(&data, "1.000001", MarketSource::Eastmoney).is_none());
+    let minute = MinutePoint {
+        time: "09:30".into(),
+        price: d("3490.14"),
+        ..Default::default()
+    };
+    let mut points = vec![minute.clone()];
+    let data = json!({"result":{"status":{"code":0},"data":[
+        {"m":"09:30:00","p":"3490.145","lx":"3506.401"},
+        {"m":"09:31:00","d":"2026-11-25","p":"3486.088","lx":"3492.102"}
+    ]}});
+    details::apply_shanghai_leading(
+        &mut points,
+        chrono::NaiveDate::from_ymd_opt(2026, 11, 26).unwrap(),
+        &shanghai_snapshot("2026-11-26", "3490.1446"),
+        &data,
+    );
+    assert_eq!(points, [minute]);
 }
 
 #[test]

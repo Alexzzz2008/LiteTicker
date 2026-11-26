@@ -138,7 +138,15 @@ export component DetailsWindow inherits Window {
     in property <float> scale: 1;
     in property <string> heading;
     in property <string> price;
-    in property <string> average-price;
+    in property <string> overlay-value;
+    in property <bool> shanghai-index;
+    in property <bool> has-leading;
+    private property <bool> compact-legend: root.width < 650px * root.scale;
+    out property <string> chart-legend: root.daily ? "日 K"
+        : root.shanghai-index ? (root.has-leading
+            ? (root.compact-legend ? "指数 · 上证领先" : "白线 指数 · 黄线 上证领先")
+            : (root.compact-legend ? "指数" : "白线 指数"))
+        : (root.compact-legend ? "价格 · 均价" : "白线 价格 · 金线 均价");
     in property <color> ink;
     in property <string> status;
     in property <string> trades-title;
@@ -183,12 +191,12 @@ export component DetailsWindow inherits Window {
                 Action {text-size: 19px * root.scale; width: 98px * root.scale; label: "分时"; accent: !root.daily; activated => {root.command("minute");}}
                 Action {text-size: 19px * root.scale; width: 98px * root.scale; label: "日 K"; accent: root.daily; activated => {root.command("daily");}}
                 Text {
-                    text: root.daily ? "日 K" : root.width < 650px * root.scale ? "价格 · 均价" : "白线 价格 · 金线 均价";
+                    text: root.chart-legend;
                     horizontal-stretch: 0; color: #a4a8b1; vertical-alignment: center;
                 }
-                if !root.daily: Text {
-                    text: root.average-price == "" ? "—" : root.average-price;
-                    horizontal-stretch: 0; color: root.average-price == "" ? #a4a8b1 : #dcb24e;
+                if !root.daily && (!root.shanghai-index || root.has-leading): Text {
+                    text: root.overlay-value == "" ? "—" : root.overlay-value;
+                    horizontal-stretch: 0; color: root.overlay-value == "" ? #a4a8b1 : #dcb24e;
                     font-family: "Consolas"; vertical-alignment: center;
                 }
                 Rectangle {}
