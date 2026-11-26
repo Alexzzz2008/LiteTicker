@@ -238,13 +238,19 @@ export component DetailsWindow inherits Window {
                         Text {width: max(0px, ladder-table.width - 98px * root.scale); text: !root.has-depth ? "五档暂无数据" : root.amount ? "五档 · 金额（元）" : "五档盘口 · 手"; color: #b4b3bc; vertical-alignment: center; overflow: elide;}
                         Action {text-size: 19px * root.scale; width: 90px * root.scale; visible: root.has-depth; label: root.amount ? "看手数" : "看金额"; activated => {root.command("unit");}}
                     }
-                    for level in root.ladder: HorizontalLayout {
-                        height: root.book-row-height; spacing: 0px;
-                        Text {width: ladder-table.label-width; font-size: ladder-table.table-font; text: level.label; color: #a4a8b1; overflow: elide;}
-                        Rectangle {width: ladder-table.price-end - ladder-table.label-width - ladder-table.price-width;}
-                        Text {width: ladder-table.price-width; font-size: ladder-table.table-font; text: level.price; color: level.ink; font-family: "Consolas"; horizontal-alignment: right; overflow: elide;}
-                        Rectangle {min-width: ladder-table.gap; horizontal-stretch: 1;}
-                        Text {width: ladder-table.quantity-width; font-size: ladder-table.table-font; text: level.size; color: #a4a8b1; font-family: "Consolas"; horizontal-alignment: right; overflow: elide;}
+                    for level[i] in root.ladder: Rectangle {
+                        height: root.book-row-height;
+                        HorizontalLayout {
+                            width: parent.width; height: parent.height; spacing: 0px;
+                            Text {width: ladder-table.label-width; font-size: ladder-table.table-font; text: level.label; color: #a4a8b1; overflow: elide;}
+                            Rectangle {width: ladder-table.price-end - ladder-table.label-width - ladder-table.price-width;}
+                            Text {width: ladder-table.price-width; font-size: ladder-table.table-font; text: level.price; color: level.ink; font-family: "Consolas"; horizontal-alignment: right; overflow: elide;}
+                            Rectangle {min-width: ladder-table.gap; horizontal-stretch: 1;}
+                            Text {width: ladder-table.quantity-width; font-size: ladder-table.table-font; text: level.size; color: #a4a8b1; font-family: "Consolas"; horizontal-alignment: right; overflow: elide;}
+                        }
+                        if i == 5 && root.has-depth: Rectangle {
+                            y: 0px; width: parent.width; height: 1px; background: #38363e;
+                        }
                     }
                 }
                 trades-table := VerticalLayout {
