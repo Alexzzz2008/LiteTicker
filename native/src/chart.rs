@@ -172,7 +172,9 @@ pub fn render(
                 });
                 if leading && segment.len() == 1 {
                     if let Some((x, y)) = points.next() {
-                        stroke(&mut pix, [(x - 0.9, y), (x + 0.9, y)], color, 1.8);
+                        let marker_width = 5.;
+                        let left = (x - marker_width / 2.).clamp(0., WIDTH as f32 - marker_width);
+                        stroke(&mut pix, [(left, y), (left + marker_width, y)], color, 3.);
                     }
                 } else {
                     stroke(&mut pix, points, color, 1.8);
@@ -189,6 +191,35 @@ pub fn render(
 mod tests {
     use super::*;
     use liteticker_native::model::MinutePoint;
+
+    #[test]
+    fn isolated_closing_point_survives_downscaling_to_the_plot_width() {
+        let data = MarketDetails {
+            symbol: SHANGHAI_COMPOSITE.into(),
+            minutes: vec![MinutePoint {
+                time: "15:00".into(),
+                price: 3500.into(),
+                leading: 3505.into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let (image, _) = render(&data, false, 3500.into(), 3500.into());
+        let rgba = image.to_rgba8().unwrap();
+        // The software renderer advances the image coordinate by an 8-bit fractional step.
+        // A three-decimal axis leaves 828 or 408 physical pixels at the two window sizes.
+        for plot_width in [828, 408] {
+            let step = WIDTH as usize * 256 / plot_width;
+            let source_x = (plot_width - 1) * step / 256;
+            assert!(
+                (0..HEIGHT as usize).any(|y| {
+                    let pixel = &rgba.as_bytes()[(y * WIDTH as usize + source_x) * 4..];
+                    pixel[1].saturating_sub(pixel[2]) > 50
+                }),
+                "the closing point is clipped at plot width {plot_width}"
+            );
+        }
+    }
 
     #[test]
     fn shanghai_chart_uses_leading_points_and_leaves_missing_minutes_blank() {
