@@ -63,7 +63,9 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $notesPath = Join-Path $env:RUNNER_TEMP 'liteticker-release-notes.md'
           $notes = @(
+            '- 上证指数（000001.SH）的分时图新增上证领先黄线，可与指数白线对照。缺少领先数据的分钟会留空，缩小窗口也能看清独立的收盘点。',
             '- 修复腾讯行情下上证指数、深证成指等指数的分时走势被压成一条直线的问题。现在曲线按指数点位绘制，盘中的涨跌更清楚。',
+            '- 五档盘口在卖一与买一之间新增浅色分隔线，方便区分买卖两侧。',
             '',
             '推荐下载 LiteTicker.exe，双击即可运行。也可下载 ZIP 安装包，完整解压后双击 install.cmd。'
           )
