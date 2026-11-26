@@ -63,8 +63,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $notesPath = Join-Path $env:RUNNER_TEMP 'liteticker-release-notes.md'
           $notes = @(
-            '- 在自选股列表右键点击股票，选择「置顶」或「置底」，即可将它移到第一行或最后一行。其他股票保持原有顺序，重启后保留排序。',
-            '- 移动后仍选中同一只股票。首行的「置顶」和末行的「置底」会自动置灰。',
+            '- 修复腾讯行情下上证指数、深证成指等指数的分时走势被压成一条直线的问题。现在曲线按指数点位绘制，盘中的涨跌更清楚。',
             '',
             '推荐下载 LiteTicker.exe，双击即可运行。也可下载 ZIP 安装包，完整解压后双击 install.cmd。'
           )
