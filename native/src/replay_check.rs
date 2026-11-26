@@ -148,13 +148,15 @@ fn point_at_name(app: &App, row: usize) {
         });
 }
 
-fn click_name(app: &App, row: usize) {
+fn click_visible_name(app: &App, row: usize) -> Result<()> {
     use slint::platform::{PointerEventButton, WindowEvent};
     let position = name_position(app, row);
     let button = PointerEventButton::Left;
     let window = app.window.window();
     window.dispatch_event(WindowEvent::PointerPressed { position, button });
+    check_hover_depth(app, Some(row), false).context("单击按下时盘口闪退")?;
     window.dispatch_event(WindowEvent::PointerReleased { position, button });
+    check_hover_depth(app, Some(row), false).context("单击松开时盘口闪退")
 }
 
 #[derive(Clone, Copy)]
@@ -265,7 +267,7 @@ fn filter_pointer_leave(window: &slint::Window, active: bool) -> Result<()> {
     Ok(())
 }
 
-// Give the real event queue and the 180 ms hover timer time to run between inputs.
+// Give the real event queue and the hover and leave timers time to run between inputs.
 fn check_quote_drag(app: Rc<App>, out: PathBuf, complete: Rc<Cell<bool>>, step: u8) {
     let test = (|| -> Result<()> {
         match step {
@@ -378,6 +380,23 @@ fn check_quote_drag(app: Rc<App>, out: PathBuf, complete: Rc<Cell<bool>>, step: 
             }
             15 => {
                 check_hover_depth(&app, None, false).context("移出未固定的盘口后应自动关闭")?;
+                point_at_name(&app, 0);
+            }
+            16 => {
+                use slint::platform::{PointerEventButton, WindowEvent};
+                check_hover_depth(&app, Some(0), false)?;
+                app.window
+                    .window()
+                    .dispatch_event(WindowEvent::PointerPressed {
+                        position: name_position(&app, 0),
+                        button: PointerEventButton::Left,
+                    });
+                app.window
+                    .window()
+                    .dispatch_event(WindowEvent::PointerExited);
+            }
+            17 => {
+                check_hover_depth(&app, None, false).context("按住后移出列表，未固定盘口应关闭")?;
                 app.window.invoke_open_row(0);
                 filter_pointer_leave(app.window.window(), false)?;
                 complete.set(true);
@@ -705,7 +724,15 @@ pub fn start(app: Rc<App>, out: PathBuf) -> Result<Timer> {
                     } else {
                         ensure!(app.selection.borrow().is_none(), "仅移动鼠标不应选中行");
                         if phase == -2 {
-                            click_name(&app, 0);
+                            click_visible_name(&app, 0)?;
+                            if depth.get_has_chart() && !app.details.borrow().snapshot(app.start.elapsed(), None).stale {
+                                let image = depth.get_chart();
+                                app.close_depth();
+                                check_hover_depth(&app, None, false)?;
+                                app.show_depth(&quote.symbol, false);
+                                check_hover_depth(&app, Some(0), false)?;
+                                ensure!(image == depth.get_chart(), "同一证券的有效缓存重新绘制了分时图");
+                            }
                         }
                         point_at_name(&app, 1 - row);
                     }

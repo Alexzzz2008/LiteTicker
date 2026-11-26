@@ -47,7 +47,7 @@ export component MainWindow inherits Window {
     callback hover-row(int, bool);
     callback context(int);
     callback drag();
-    callback cancel-hover();
+    callback cancel-hover(bool);
     callback key-action(string);
     preferred-width: 550px * q-scale;
     preferred-height: (14px + 43px * max(1, min(12, rows.length))) * q-scale + 34px * g-scale;
@@ -101,7 +101,7 @@ export component MainWindow inherits Window {
                             root.hover-row(i, true);
                         } else if event.kind == PointerEventKind.down {
                             root.pointer-down = event.button == PointerEventButton.left;
-                            root.cancel-hover();
+                            root.cancel-hover(event.button != PointerEventButton.left);
                             self.dragging = false;
                             keys.focus(); root.select-row(i);
                             if event.button == PointerEventButton.right { root.context(i); }
@@ -121,7 +121,7 @@ export component MainWindow inherits Window {
                 pointer-event(e) => {
                     if e.kind == PointerEventKind.down {
                         root.pointer-down = e.button == PointerEventButton.left;
-                        root.cancel-hover();
+                        root.cancel-hover(true);
                         if e.button == PointerEventButton.right {root.context(root.selection);}
                         else if e.button == PointerEventButton.left {root.drag();}
                     } else if e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel {

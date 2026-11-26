@@ -220,7 +220,7 @@ impl DetailsSession {
         });
         if self.key != next {
             self.generation = self.generation.wrapping_add(1);
-            if let Some(active) = &self.active {
+            if let Some(active) = self.active.take() {
                 active.cancellation.cancel();
             }
         }
@@ -534,6 +534,35 @@ mod tests {
             session
                 .begin_refresh(false, Duration::from_secs(6), interval)
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn switching_detail_stock_starts_immediately_and_ignores_the_old_completion() {
+        let mut session = DetailsSession::new();
+        let now = Duration::ZERO;
+        let first = Arc::new(quote("600000.SH", 10));
+        let second = Arc::new(quote("000001.SZ", 12));
+        session.select(Some(first), MarketSource::Tencent, false);
+        let old = session.begin_refresh(false, now, None).unwrap();
+        session.select(Some(second.clone()), MarketSource::Tencent, false);
+        assert!(old.cancellation.is_cancelled());
+        let current = session
+            .begin_refresh(false, now, None)
+            .expect("the selected stock must not wait for a cancelled request");
+
+        assert!(!session.complete(&old, Err("late response".into()), now));
+        session.select(Some(second.clone()), MarketSource::Tencent, false);
+        assert!(!current.cancellation.is_cancelled());
+        assert!(session.begin_refresh(true, now, None).is_none());
+        let details = MarketDetails {
+            symbol: second.symbol.clone(),
+            ..Default::default()
+        };
+        assert!(session.complete(&current, Ok(details), now));
+        assert_eq!(
+            session.snapshot(now, None).data.unwrap().symbol,
+            second.symbol
         );
     }
 

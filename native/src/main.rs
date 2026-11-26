@@ -392,7 +392,7 @@ impl App {
         self.window
             .on_hover_row(|i, inside| with_app(|a| a.hover_row(i, inside)));
         self.window
-            .on_cancel_hover(|| with_app(|a| a.cancel_hover()));
+            .on_cancel_hover(|dismiss| with_app(|a| a.cancel_hover(dismiss)));
         self.window
             .on_key_action(|key| with_app(|a| a.command(&key)));
         #[cfg(windows)]
@@ -405,7 +405,7 @@ impl App {
         });
         self.window.on_drag(|| {
             with_app(|a| {
-                a.cancel_hover();
+                a.cancel_hover(true);
                 #[cfg(windows)]
                 if let Some(p) = a.platform.borrow().as_ref() {
                     p.start_drag();
@@ -622,8 +622,6 @@ impl App {
                     .complete(&r, v, self.start.elapsed());
                 if changed {
                     self.render_depth();
-                } else if self.detail_symbol.borrow().is_some() {
-                    self.refresh_details(false);
                 }
             }
             Completion::Search(g, v) => self.finish_search(g, v),
@@ -806,11 +804,11 @@ impl App {
     }
 }
 impl App {
-    fn cancel_hover(&self) {
+    fn cancel_hover(&self, dismiss: bool) {
         self.hovered_symbol.take();
         self.hover.stop();
         self.leave.stop();
-        if !self.pinned.get() {
+        if dismiss && !self.pinned.get() {
             self.close_depth();
         }
     }
@@ -839,23 +837,31 @@ impl App {
             if same {
                 self.hovered_symbol.take();
                 self.hover.stop();
+            }
+            if self.hovered_symbol.borrow().is_none() {
                 self.schedule_leave();
             }
             return;
         }
         if self.pointer_pressed() {
-            self.cancel_hover();
+            self.cancel_hover(true);
             return;
         }
         self.leave.stop();
         if same {
             return;
         }
+        let current = self.detail_symbol.borrow();
+        let already_open = current.as_ref() == Some(&symbol);
+        let delay = Duration::from_millis(if current.is_some() { 70 } else { 120 });
         self.hovered_symbol.replace(Some(symbol));
-        self.hover
-            .start(TimerMode::SingleShot, Duration::from_millis(180), || {
-                with_app(|a| a.show_hovered())
-            });
+        if already_open {
+            self.hover.stop();
+            return;
+        }
+        self.hover.start(TimerMode::SingleShot, delay, || {
+            with_app(|a| a.show_hovered())
+        });
     }
     fn show_hovered(self: &Rc<Self>) {
         if self.pinned.get() {
@@ -865,14 +871,17 @@ impl App {
             return;
         };
         if self.pointer_pressed() {
-            self.cancel_hover();
+            self.cancel_hover(true);
             return;
         }
         self.show_depth(&symbol, false);
     }
     fn schedule_leave(&self) {
+        if self.detail_symbol.borrow().is_none() || self.pinned.get() {
+            return;
+        }
         self.leave
-            .start(TimerMode::SingleShot, Duration::from_millis(280), || {
+            .start(TimerMode::SingleShot, Duration::from_millis(180), || {
                 with_app(|a| {
                     if a.hovered_symbol.borrow().is_none() && !a.in_depth.get() && !a.pinned.get() {
                         a.close_depth();
@@ -884,11 +893,12 @@ impl App {
         self.hovered_symbol.take();
         self.hover.stop();
         self.leave.stop();
+        if self.detail_symbol.take().is_none() {
+            return;
+        }
         self.detail_timer.stop();
         self.details.borrow_mut().deactivate();
         self.trades.borrow_mut().deactivate();
-        self.detail_symbol.take();
-        self.chart_data.take();
         self.pinned.set(false);
         self.in_depth.set(false);
         if let Some(d) = self.depth.borrow().as_ref() {
@@ -900,6 +910,12 @@ impl App {
             || !self.visible.get()
             || !self.quotes.borrow().snapshot_ref().quotes.contains_key(id)
         {
+            return;
+        }
+        if self.detail_symbol.borrow().as_deref() == Some(id) {
+            if pin && !self.pinned.replace(true) {
+                self.render_depth();
+            }
             return;
         }
         let new_window = self.depth.borrow().is_none();
@@ -917,7 +933,10 @@ impl App {
                         a.render_depth();
                     }
                     "daily" | "minute" => {
-                        a.daily.set(c == "daily");
+                        let daily = c == "daily";
+                        if a.daily.replace(daily) == daily {
+                            return;
+                        }
                         a.chart_data.take();
                         a.refresh_details(false);
                         a.render_depth();
@@ -941,14 +960,12 @@ impl App {
             });
             self.depth.replace(Some(d));
         }
-        let first = self.detail_symbol.borrow().is_none();
-        if self.detail_symbol.borrow().as_deref() != Some(id) {
-            self.chart_data.take();
-        }
-        self.detail_symbol.replace(Some(id.to_owned()));
+        let first = self.detail_symbol.replace(Some(id.to_owned())).is_none();
         if pin {
             self.pinned.set(true);
         }
+        self.refresh_details(false);
+        self.render_depth();
         if first {
             let borrow = self.depth.borrow();
             let d = borrow.as_ref().unwrap();
@@ -967,11 +984,13 @@ impl App {
             }
             #[cfg(not(windows))]
             d.window().set_size(size);
-            let _ = d.show();
-            when_mapped(d, move |d| {
+            if d.show().is_err() {
+                self.close_depth();
+                return;
+            }
+            let finish_placement = move |d: DetailsWindow| {
                 with_app(|app| {
                     d.set_scale(scale / d.window().scale_factor().max(1.));
-                    d.window().set_size(size);
                     #[cfg(windows)]
                     adjust_depth_window(
                         app.window.window(),
@@ -980,10 +999,16 @@ impl App {
                         true,
                     );
                 })
-            });
+            };
+            #[cfg(windows)]
+            if hwnd(d.window()).is_none() {
+                when_mapped(d, finish_placement);
+            } else {
+                finish_placement(d.clone_strong());
+            }
+            #[cfg(not(windows))]
+            finish_placement(d.clone_strong());
         }
-        self.refresh_details(false);
-        self.render_depth();
         self.arm_details_timer();
     }
     fn trade_refresh_interval(&self) -> Duration {
