@@ -132,6 +132,39 @@ fn display_precision_units_and_overflow_match_v105() {
     assert_eq!(format_depth_amount(Decimal::ZERO, Decimal::ONE), "—");
 }
 #[test]
+fn exchange_holidays_use_closed_polling_even_on_weekdays() {
+    let settings = AppSettings::default();
+    for (day, open) in [
+        ("2025-01-28", false),
+        ("2025-02-05", true),
+        ("2026-02-23", false),
+        ("2026-02-24", true),
+        ("2026-10-01", false),
+        ("2026-10-08", true),
+        ("2026-10-10", false),
+    ] {
+        let now = chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d")
+            .unwrap()
+            .and_hms_opt(10, 0, 0)
+            .unwrap();
+        assert_eq!(is_trading_time(now), open, "{day}");
+        assert_eq!(interval_seconds(&settings, now), if open { 1 } else { 30 });
+    }
+}
+
+#[test]
+fn unpublished_calendar_uses_estimates_only_during_weekday_sessions() {
+    let at = |day| {
+        chrono::NaiveDate::from_ymd_opt(2030, 1, day)
+            .unwrap()
+            .and_hms_opt(10, 0, 0)
+            .unwrap()
+    };
+    assert_eq!(trading_session(at(1)), TradingSession::EstimatedOpen);
+    assert_eq!(trading_session(at(5)), TradingSession::Closed);
+}
+
+#[test]
 fn trading_boundaries_and_closed_market_interval() {
     let settings = AppSettings {
         refresh_seconds: 2,

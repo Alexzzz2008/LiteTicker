@@ -85,27 +85,35 @@ impl App {
         self.runtime.spawn(async move {
             let progress: update::Progress =
                 Arc::new(move |pct| deliver(Completion::Progress(id, pct)));
-            let file = async {
-                update::UpdateClient::new()?
+            let prepared = async {
+                let file = update::UpdateClient::new()?
                     .download(&release, Some(progress), token)
-                    .await
+                    .await?;
+                update::prepare_update(file).await
             }
             .await;
-            deliver(Completion::Download(id, file.map_err(|e| format!("{e:#}"))));
+            deliver(Completion::UpdatePrepared(
+                id,
+                prepared.map_err(|e| format!("{e:#}")),
+            ));
         });
     }
-    pub(super) fn downloaded_update(&self, id: u64, file: Result<DownloadedUpdate, String>) {
+    pub(super) fn finish_update_preparation(
+        &self,
+        id: u64,
+        prepared: Result<PreparedUpdate, String>,
+    ) {
         if id != self.update_gen.get() {
             return;
         }
         self.update_token.take();
         let result = (|| -> Result<()> {
-            let file = file.map_err(anyhow::Error::msg)?;
+            let prepared = prepared.map_err(anyhow::Error::msg)?;
             let mut settings = self.settings.borrow().clone();
             let position = self.window.window().position();
             (settings.x, settings.y) = (position.x, position.y);
             self.store.save(&settings)?;
-            update::launch_update(file)?;
+            prepared.launch()?;
             slint::quit_event_loop()?;
             Ok(())
         })();

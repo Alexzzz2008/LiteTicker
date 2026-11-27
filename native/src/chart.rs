@@ -170,14 +170,17 @@ pub fn render(
                         y(value),
                     ))
                 });
-                if leading && segment.len() == 1 {
-                    if let Some((x, y)) = points.next() {
-                        let marker_width = 5.;
-                        let left = (x - marker_width / 2.).clamp(0., WIDTH as f32 - marker_width);
-                        stroke(&mut pix, [(left, y), (left + marker_width, y)], color, 3.);
-                    }
+                let Some((x, y)) = points.next() else {
+                    continue;
+                };
+                if let Some(second) = points.next() {
+                    let line = [(x, y), second].into_iter().chain(points);
+                    stroke(&mut pix, line, color, 1.8);
                 } else {
-                    stroke(&mut pix, points, color, 1.8);
+                    // A wider price marker stays visible when the first price equals its overlay.
+                    let width = if overlay { 5. } else { 9. };
+                    let left = (x - width / 2.).clamp(0., WIDTH as f32 - width);
+                    stroke(&mut pix, [(left, y), (left + width, y)], color, 3.);
                 }
             }
         }
@@ -191,6 +194,53 @@ pub fn render(
 mod tests {
     use super::*;
     use liteticker_native::model::MinutePoint;
+
+    #[test]
+    fn opening_minute_shows_the_price_and_overlay_at_the_left_edge() {
+        for symbol in ["000001.SZ", SHANGHAI_COMPOSITE] {
+            let data = MarketDetails {
+                symbol: symbol.into(),
+                minutes: vec![MinutePoint {
+                    time: "09:30".into(),
+                    price: 10.into(),
+                    average: 11.into(),
+                    leading: 12.into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            let (image, _) = render(&data, false, 10.into(), 10.into());
+            let rgba = image.to_rgba8().unwrap();
+            for color in [[220, 220, 222], [220, 178, 78]] {
+                assert!(
+                    rgba.as_bytes()
+                        .chunks_exact(WIDTH as usize * 4)
+                        .any(|row| row[..3] == color),
+                    "missing {color:?} at 09:30 for {symbol}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn coincident_opening_price_and_average_remain_visible() {
+        let data = MarketDetails {
+            symbol: "000001.SZ".into(),
+            minutes: vec![MinutePoint {
+                time: "09:30".into(),
+                price: 10.into(),
+                average: 10.into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let (image, _) = render(&data, false, 10.into(), 10.into());
+        let pixels = image.to_rgba8().unwrap();
+        let row = &pixels.as_bytes()[(HEIGHT * WIDTH / 2 * 4) as usize..][..10 * 4];
+        for color in [[220, 220, 222], [220, 178, 78]] {
+            assert!(row.chunks_exact(4).any(|pixel| pixel[..3] == color));
+        }
+    }
 
     #[test]
     fn isolated_closing_point_survives_downscaling_to_the_plot_width() {

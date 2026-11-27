@@ -506,7 +506,7 @@ fn shanghai_mixed_session_dates_do_not_produce_a_leading_line() {
     let data = json!({"data":{"market":1,"code":"000001","trends":[
         "2026-11-25 09:30,3480,3480,3480,3480,100,348000", "2026-11-26 09:31,3490,3490,3490,3490,200,698000"
     ]}});
-    assert!(details::shanghai_session_day(&data, "1.000001", MarketSource::Eastmoney).is_none());
+    assert!(details::minute_session_day(&data, "1.000001", MarketSource::Eastmoney).is_err());
     let minute = MinutePoint {
         time: "09:30".into(),
         price: d("3490.14"),
@@ -563,7 +563,7 @@ fn missing_minute_average_does_not_substitute_the_last_price() {
 
 #[tokio::test]
 async fn minute_details_one_request_units_sort_and_identity() {
-    let payload = r#"{"data":{"sh600000":{"data":{"data":["0931 10.2 150 150500","0930 10 100 100000","1200 20 200 200000","bad","0932 NaN 200 200000"]}}}}"#;
+    let payload = r#"{"data":{"sh600000":{"data":{"date":"20261116","data":["0931 10.2 150 150500","0930 10 100 100000","1200 20 200 200000","bad","0932 NaN 200 200000"]}}}}"#;
     let server = Server::new(vec![Reply::utf8(payload)]);
     let details = server
         .client()
@@ -618,6 +618,40 @@ async fn minute_details_one_request_units_sort_and_identity() {
     assert!(details.error.is_some());
     assert!(details.minutes.is_empty());
 }
+#[tokio::test]
+async fn quote_day_keeps_intraday_prices_from_mixing_sessions() {
+    let current = r#"{"data":{"sh600000":{"data":{"date":"20261116","data":["0930 10 100"]}}}}"#;
+    let old = current.replace("20261116", "20261113");
+    let mixed = r#"{"data":{"code":"600000","trends":["2026-11-13 09:30,10,10,10,10,10","2026-11-16 09:31,11,11,11,11,20"]}}"#;
+    let missing = r#"{"data":{"sh600000":{"data":{"data":["0930 10 100"]}}}}"#;
+    let old_em =
+        r#"{"data":{"code":"600000","market":1,"trends":["2026-11-13 09:30,10,10,10,10,10"]}}"#;
+    for (source, body, quote_dated, valid) in [
+        (MarketSource::Tencent, current, true, true),
+        (MarketSource::Tencent, old.as_str(), true, false),
+        (MarketSource::Tencent, missing, true, false),
+        (MarketSource::Tencent, old.as_str(), false, true),
+        (MarketSource::Tencent, missing, false, true),
+        (MarketSource::Eastmoney, old_em, true, false),
+        (MarketSource::Eastmoney, old_em, false, true),
+        (MarketSource::Eastmoney, mixed, true, false),
+        (MarketSource::Eastmoney, mixed, false, false),
+    ] {
+        let mut stock = sample();
+        if !quote_dated {
+            stock.timestamp.clear();
+        }
+        let server = Server::new(vec![Reply::utf8(body)]);
+        let chart = server
+            .client()
+            .fetch_details(&stock, source, false, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(!chart.minutes.is_empty(), valid);
+        assert_eq!(chart.error.is_none(), valid);
+    }
+}
+
 #[test]
 fn daily_fallback_fields_invalid_rows_and_sixty_limit() {
     let payload = json!({"data":{"sh600000":{"qfqday":[],"day":[["2026-11-13","10","10.5","11","9.5"],["2026-11-16","10","bad","11","9.5"]]}}});
@@ -660,15 +694,16 @@ fn tencent_same_second_trades_keep_the_latest_sequence_numbers() {
         .join("|");
     let trades =
         details::parse_recent_page(&[json!(0), json!(rows)], 0, chrono::NaiveTime::MIN).unwrap();
+    let trades = details::latest(trades.into_values().rev().collect());
     let lots: Vec<_> = trades.iter().map(|trade| trade.volume_lots).collect();
     assert_eq!(lots, (6..=25).rev().map(Decimal::from).collect::<Vec<_>>());
 }
 #[tokio::test]
-async fn recent_trades_fixed_two_http_exact_tail_units_and_direction() {
+async fn recent_trades_first_page_units_and_direction() {
     let rows = "140/14:20:09/10.70/0.01/2/2140/B|141/14:20:12/10.69/-0.01/3/3207/S|142/14:20:15/10.70/0.01/5/5350/M|bad|143/14:20:18/NaN/0/10/100/B";
     let server = Server::new(vec![
-        Reply::utf8(&metadata("sh600000", "20261116", RANGES)),
-        Reply::utf8(&page("sh600000", 2, rows)),
+        Reply::utf8(&metadata("sh600000", "20261116", "14:18:48~14:20:15")),
+        Reply::utf8(&page("sh600000", 0, rows)),
     ]);
     let result = server
         .client()
@@ -677,7 +712,7 @@ async fn recent_trades_fixed_two_http_exact_tail_units_and_direction() {
         .unwrap();
     assert_eq!(server.requests().len(), 2);
     assert!(server.requests()[0].contains("action=recent_data"));
-    assert!(server.requests()[1].contains("action=data&c=sh600000&p=2"));
+    assert!(server.requests()[1].contains("action=data&c=sh600000&p=0"));
     assert_eq!(result.trades.len(), 3);
     assert_eq!(result.trades[0].time, "14:20:15");
     assert_eq!(result.trades[0].volume_lots, d("5"));
@@ -686,6 +721,95 @@ async fn recent_trades_fixed_two_http_exact_tail_units_and_direction() {
         [0, 2, 1]
     );
 }
+#[tokio::test]
+async fn tencent_recent_backfills_a_short_tail_by_sequence_across_pages() {
+    let ranges = "09:30:00~14:36:57|14:36:57~14:36:57";
+    let previous = (4271..=4340)
+        .map(|id| format!("{id}/14:36:57/133.91/0.00/35/466944/S"))
+        .collect::<Vec<_>>()
+        .join("|");
+    let server = Server::new(vec![
+        Reply::utf8(&metadata("sh600000", "20261116", ranges)),
+        Reply::utf8(&page(
+            "sh600000",
+            1,
+            "4340/14:36:57/133.94/0.03/48/645967/B",
+        )),
+        Reply::utf8(&page("sh600000", 0, &previous)),
+    ]);
+    let details = server
+        .client()
+        .fetch_recent_trades(&sample(), MarketSource::Tencent, CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(details.trades.len() >= 10 && details.trades.len() <= 20);
+    assert_eq!(details.trades[0].price, d("133.94"));
+    assert!(
+        details.trades[1..]
+            .iter()
+            .all(|row| row.price == d("133.91"))
+    );
+    let requests = server.requests();
+    assert_eq!(requests.len(), 3);
+    assert!(requests[2].contains("&p=0"));
+}
+
+#[tokio::test]
+async fn tencent_recent_skips_unneeded_backfill_and_keeps_tail_on_backfill_failure() {
+    let ranges = "09:30:00~14:36:54|14:36:57~14:36:57";
+    for tail_size in [1, 10] {
+        let rows = (1..=tail_size)
+            .map(|i| format!("{i}/14:36:57/133.94/0.03/48/645967/B"))
+            .collect::<Vec<_>>()
+            .join("|");
+        let mut replies = vec![
+            Reply::utf8(&metadata("sh600000", "20261116", ranges)),
+            Reply::utf8(&page("sh600000", 1, &rows)),
+        ];
+        if tail_size == 1 {
+            let mut failure = Reply::utf8("");
+            failure.status = 503;
+            replies.push(failure);
+        }
+        let server = Server::new(replies);
+        let stock = Quote {
+            timestamp: String::new(),
+            ..sample()
+        };
+        let details = server
+            .client()
+            .fetch_recent_trades(&stock, MarketSource::Tencent, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(details.trades.len(), tail_size);
+        assert_eq!(server.requests().len(), if tail_size == 1 { 3 } else { 2 });
+    }
+}
+
+#[tokio::test]
+async fn tencent_recent_empty_shanghai_index_is_optional_but_stock_errors_survive() {
+    for (symbol, ok) in [
+        ("000001.SH", true),
+        ("000688.SH", true),
+        ("000001.SZ", false),
+        ("600000.SH", false),
+    ] {
+        let server = Server::new(vec![Reply::utf8("  ")]);
+        let stock = Quote {
+            symbol: symbol.into(),
+            ..sample()
+        };
+        let result = server
+            .client()
+            .fetch_recent_trades(&stock, MarketSource::Tencent, CancellationToken::new())
+            .await;
+        assert_eq!(result.is_ok(), ok, "{symbol}");
+        if ok {
+            assert!(result.unwrap().trades.is_empty());
+        }
+    }
+}
+
 #[tokio::test]
 async fn recent_metadata_page_failure_and_empty_remain_distinct_no_fallback() {
     for bad in [
@@ -782,6 +906,7 @@ async fn em_recent_single_source_and_latest_twenty() {
     let records =
         details::tencent_array(&page("sh600000", 0, &rows), "v_detail_data_sh600000").unwrap();
     let result = details::parse_recent_page(&records, 0, chrono::NaiveTime::MIN).unwrap();
+    let result = details::latest(result.into_values().rev().collect());
     assert_eq!(result.len(), 20);
     assert_eq!(result[0].time, "14:18:29");
 }
@@ -916,7 +1041,7 @@ async fn search_encoding_cap_and_quote_empty_bodies_fail_explicitly() {
 }
 #[tokio::test]
 async fn cancellation_reaches_every_network_api_and_precancel_makes_zero_requests() {
-    for mode in 0..4 {
+    for mode in 0..5 {
         let mut response = Reply::utf8("");
         response.delay = Duration::from_millis(150);
         let server = Server::new(vec![response]);
@@ -940,6 +1065,10 @@ async fn cancellation_reaches_every_network_api_and_precancel_makes_zero_request
                 .fetch_recent_trades(&sample(), MarketSource::Tencent, token.clone())
                 .await
                 .map(|_| ()),
+            3 => client
+                .fetch_recent_trades(&sample(), MarketSource::Eastmoney, token.clone())
+                .await
+                .map(|_| ()),
             _ => client.search("gzmt", token.clone()).await.map(|_| ()),
         };
         assert!(result.unwrap_err().to_string().contains("取消"));
@@ -956,6 +1085,44 @@ async fn cancellation_reaches_every_network_api_and_precancel_makes_zero_request
     );
     assert!(server.requests().is_empty());
 }
+#[tokio::test]
+async fn em_recent_timeout_preserves_four_second_limit() {
+    let mut reply = Reply::utf8(r#"{"data":{"code":"600000","details":[]}}"#);
+    reply.delay = Duration::from_millis(4700);
+    let server = Server::new(vec![reply]);
+    let client = server.client();
+    let start = Instant::now();
+    let err = client
+        .fetch_recent_trades(&sample(), MarketSource::Eastmoney, CancellationToken::new())
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("4秒"));
+    assert!(start.elapsed() < Duration::from_millis(4500));
+}
+
+#[tokio::test]
+async fn recent_page_timeout_preserves_the_successful_tail_within_the_shared_deadline() {
+    let mut tail = Reply::utf8(&page("sh600000", 2, "142/14:20:15/10.7/0/5/5350/B"));
+    tail.delay = Duration::from_millis(1800);
+    let mut previous = Reply::utf8(&page("sh600000", 1, "141/14:18:45/10.6/0/5/5300/S"));
+    previous.delay = Duration::from_millis(2900);
+    let server = Server::new(vec![
+        Reply::utf8(&metadata("sh600000", "20261116", RANGES)),
+        tail,
+        previous,
+    ]);
+    let client = server.client();
+    let start = Instant::now();
+    let details = client
+        .fetch_recent_trades(&sample(), MarketSource::Tencent, CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(server.requests().len(), 3);
+    assert_eq!(details.trades.len(), 1);
+    assert_eq!(details.trades[0].price, d("10.7"));
+    assert!(start.elapsed() < Duration::from_millis(4500));
+}
+
 #[tokio::test]
 async fn recent_overall_four_second_timeout_bounds_both_requests() {
     let mut first = Reply::utf8(&metadata("sh600000", "20261116", RANGES));

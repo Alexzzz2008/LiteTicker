@@ -257,25 +257,20 @@ impl DesktopPlatform {
             Shell_NotifyIconW(NIM_MODIFY, &data);
         }
     }
-    /// A hotkey conflict leaves both old registrations and appearance unchanged.
-    pub fn apply_settings(&self, settings: &AppSettings) -> Result<()> {
+    pub fn apply_hotkeys(&self, toggle: u32, refresh: u32) -> Result<()> {
         let state = &self.state;
         if !state.alive.get() {
-            bail!("主窗已关闭，无法应用桌面设置");
+            bail!("主窗已关闭，无法注册快捷键");
         }
-        let pixels =
-            (22.0 * settings.global_font_percent.clamp(80, 120) as f64 / 100.0).round() as i32;
-        let next_font = if pixels != state.font_pixels.get() {
-            Some(create_font(pixels)?)
-        } else {
-            None
-        };
-        let key_result = if !state.enable_hotkeys {
-            Ok(())
-        } else {
-            state.hotkeys.borrow_mut().apply(
-                settings.toggle_shortcut,
-                settings.refresh_shortcut,
+        if !state.enable_hotkeys {
+            return Ok(());
+        }
+        state
+            .hotkeys
+            .borrow_mut()
+            .apply(
+                toggle,
+                refresh,
                 |id, key| unsafe {
                     let mut modifiers = MOD_NOREPEAT;
                     if key & 0x10000 != 0 {
@@ -293,17 +288,17 @@ impl DesktopPlatform {
                     UnregisterHotKey(state.hwnd, id);
                 },
             )
-        };
-        if let Err(error) = key_result {
-            if let Some(font) = next_font {
-                unsafe {
-                    DeleteObject(font);
-                }
-            }
-            bail!(error);
+            .map_err(anyhow::Error::msg)
+    }
+    pub fn apply_appearance(&self, settings: &AppSettings) -> Result<()> {
+        let state = &self.state;
+        if !state.alive.get() {
+            bail!("主窗已关闭，无法应用桌面设置");
         }
-        if let Some(font) = next_font {
-            let previous = state.font.replace(font);
+        let pixels =
+            (22.0 * settings.global_font_percent.clamp(80, 120) as f64 / 100.0).round() as i32;
+        if pixels != state.font_pixels.get() {
+            let previous = state.font.replace(create_font(pixels)?);
             state.font_pixels.set(pixels);
             unsafe {
                 DeleteObject(previous);

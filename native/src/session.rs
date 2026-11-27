@@ -160,6 +160,7 @@ impl Drop for QuoteSession {
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct DetailKey {
+    trading_day: Option<chrono::NaiveDate>,
     pub source: MarketSource,
     pub symbol: String,
     pub daily: bool,
@@ -214,6 +215,7 @@ impl DetailsSession {
     }
     pub fn select(&mut self, quote: Option<Arc<Quote>>, source: MarketSource, daily: bool) {
         let next = quote.as_ref().map(|q| DetailKey {
+            trading_day: if daily { None } else { q.trading_day() },
             source,
             symbol: q.symbol.clone(),
             daily,
@@ -330,12 +332,18 @@ impl DetailsSession {
                 let error = data.error.clone();
                 (Some(Arc::new(data)), error)
             }
-            Err(error) => (
-                self.cache
+            Err(error) => {
+                let data = self
+                    .cache
                     .get(&request.key)
-                    .and_then(|entry| entry.data.clone()),
-                Some(format!("详情获取失败，保留上次数据：{error}")),
-            ),
+                    .and_then(|entry| entry.data.clone());
+                let status = if data.is_some() {
+                    format!("详情获取失败，保留上次数据：{error}")
+                } else {
+                    format!("详情获取失败：{error}")
+                };
+                (data, Some(status))
+            }
         };
         if !self.cache.contains_key(&request.key) && self.cache.len() >= 16 {
             if let Some(key) = self
@@ -498,6 +506,80 @@ mod tests {
         session.dispose();
         assert!(!session.complete(&request, Ok(vec![quote("000001.SZ", 21)]), now()));
         assert!(session.begin_refresh().is_none());
+    }
+    #[test]
+    fn new_quote_day_invalidates_intraday_cache_and_late_responses() {
+        let mut session = DetailsSession::new();
+        let friday = Arc::new(Quote {
+            timestamp: "20261113145959".into(),
+            ..quote("600000.SH", 10)
+        });
+        let monday = Arc::new(Quote {
+            timestamp: "20261116093000".into(),
+            ..quote("600000.SH", 11)
+        });
+        session.select(Some(friday.clone()), MarketSource::Tencent, false);
+        let first = session.begin_refresh(false, Duration::ZERO, None).unwrap();
+        session.complete(
+            &first,
+            Ok(MarketDetails {
+                symbol: friday.symbol.clone(),
+                minutes: vec![MinutePoint {
+                    time: "14:59".into(),
+                    price: friday.price,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            Duration::ZERO,
+        );
+        let late = session
+            .begin_refresh(true, Duration::from_secs(1), None)
+            .unwrap();
+        session.select(Some(monday.clone()), MarketSource::Tencent, false);
+        assert!(late.cancellation.is_cancelled());
+        assert!(
+            session
+                .snapshot(Duration::from_secs(2), None)
+                .data
+                .is_none()
+        );
+        let current = session
+            .begin_refresh(false, Duration::from_secs(2), None)
+            .unwrap();
+        assert!(!session.complete(&late, Err("late".into()), Duration::from_secs(2)));
+        assert!(session.complete(&current, Err("offline".into()), Duration::from_secs(3)));
+        let failed = session.snapshot(Duration::from_secs(3), None);
+        assert!(failed.data.is_none());
+        assert!(!failed.error.unwrap().contains("保留上次数据"));
+        let retry = session
+            .begin_refresh(true, Duration::from_secs(4), None)
+            .unwrap();
+        session.complete(
+            &retry,
+            Ok(MarketDetails {
+                symbol: monday.symbol.clone(),
+                error: Some("分时交易日与报价不一致".into()),
+                ..Default::default()
+            }),
+            Duration::from_secs(4),
+        );
+        let retried = session.snapshot(Duration::from_secs(4), None);
+        assert!(retried.data.unwrap().minutes.is_empty());
+        session.select(Some(friday), MarketSource::Tencent, true);
+        let history = session
+            .begin_refresh(false, Duration::from_secs(4), None)
+            .unwrap();
+        session.select(Some(monday), MarketSource::Tencent, true);
+        assert!(!history.cancellation.is_cancelled());
+        assert!(session.complete(
+            &history,
+            Ok(MarketDetails {
+                symbol: history.quote.symbol.clone(),
+                ..Default::default()
+            }),
+            Duration::from_secs(5),
+        ));
     }
     #[test]
     fn trade_refresh_interval_counts_from_dispatch_and_freshness_from_receipt() {

@@ -3,14 +3,14 @@ mod quotes;
 mod search;
 
 use crate::model::{
-    MarketDetails, MarketSource, Quote, SHANGHAI_COMPOSITE, SymbolMatch, beijing_now,
+    MarketDetails, MarketSource, Quote, SHANGHAI_COMPOSITE, SymbolMatch, TradeTick, beijing_now,
     normalize_symbol,
 };
 use anyhow::{Context, Result, bail};
 use encoding_rs::GBK;
 use reqwest::Client;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     time::Duration,
 };
 use tokio_util::sync::CancellationToken;
@@ -170,10 +170,14 @@ impl MarketClient {
                 details.daily = details::parse_daily(&payload, &symbol, &code, source)?;
                 Ok(!details.daily.is_empty())
             } else {
-                details.minutes = details::parse_minutes(&payload, &symbol, &code, source)?;
-                if let Some((snapshot, leading)) = leading
-                    && let Some(day) = details::shanghai_session_day(&payload, &code, source)
+                let day = details::minute_session_day(&payload, &code, source)?;
+                if let Some(expected) = quote.trading_day()
+                    && Some(expected) != day
                 {
+                    bail!("分时交易日与报价不一致。");
+                }
+                details.minutes = details::parse_minutes(&payload, &symbol, &code, source)?;
+                if let (Some((snapshot, leading)), Some(day)) = (leading, day) {
                     details::apply_shanghai_leading(&mut details.minutes, day, &snapshot, &leading);
                 }
                 Ok(!details.minutes.is_empty())
@@ -223,34 +227,98 @@ impl MarketClient {
         check_cancelled(&token)?;
         let symbol = normalize_symbol(&quote.symbol)?;
         let code = source_code(&symbol, source);
-        let work = async {
-            let trades = if source == MarketSource::Tencent {
-                let text = self.get_text(&format!("https://stock.gtimg.cn/data/index.php?appn=detail&action=recent_data&c={code}"), source, false, 2 * 1024 * 1024, &token).await.context("腾讯近期成交页时间表请求失败")?;
-                let metadata = details::tencent_array(&text, &format!("v_detail_time_{code}"))?;
-                let expected = details::quote_date(&quote.timestamp);
-                let (page, start) = details::recent_page(&metadata, expected)?;
-                if let Some(page) = page {
-                    let text = self.get_text(&format!("https://stock.gtimg.cn/data/index.php?appn=detail&action=data&c={code}&p={page}"), source, false, 2 * 1024 * 1024, &token).await.context("腾讯近期成交末页请求失败")?;
-                    let records = details::tencent_array(&text, &format!("v_detail_data_{code}"))?;
-                    details::parse_recent_page(&records, page, start)?
-                } else {
-                    Vec::new()
-                }
-            } else {
+        let trades = if source == MarketSource::Tencent {
+            self.fetch_tencent_trades(&code, quote, &token).await
+        } else {
+            let work = async {
                 let text = self.get_text(&format!("https://push2.eastmoney.com/api/qt/stock/details/get?ut=fa5fd1943c7b386f172d6893dbfba10b&secid={code}&fields1=f1,f2,f3,f4&fields2=f51,f52,f53,f54,f55&pos=-20"), source, false, 2 * 1024 * 1024, &token).await?;
-                details::parse_em_trades(&json_object(&text)?, &symbol)?
+                details::parse_em_trades(&json_object(&text)?, &symbol)
             };
-            Ok(MarketDetails {
-                symbol,
-                trades,
-                ..Default::default()
-            })
+            tokio::select! { biased;
+                _ = token.cancelled() => bail!("请求已取消"),
+                _ = tokio::time::sleep(Duration::from_secs(4)) => bail!("近期成交请求超过4秒，请稍后重试。"),
+                result = work => result,
+            }
         };
-        tokio::select! { biased;
-            _ = token.cancelled() => bail!("请求已取消"),
-            result = tokio::time::timeout(Duration::from_secs(4), work) => result.context("近期成交请求超过4秒，请稍后重试。")?,
-        }
+        check_cancelled(&token)?;
+        Ok(MarketDetails {
+            symbol,
+            trades: trades?,
+            ..Default::default()
+        })
     }
+
+    async fn fetch_tencent_trades(
+        &self,
+        code: &str,
+        quote: &Quote,
+        token: &CancellationToken,
+    ) -> Result<Vec<TradeTick>> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
+        let base = "https://stock.gtimg.cn/data/index.php?appn=detail";
+        let tail = async {
+            let text = self
+                .get_text(
+                    &format!("{base}&action=recent_data&c={code}"),
+                    MarketSource::Tencent,
+                    false,
+                    2 * 1024 * 1024,
+                    token,
+                )
+                .await
+                .context("腾讯近期成交页时间表请求失败")?;
+            if text.trim().is_empty()
+                && matches!(code, "sh000001" | "sh000016" | "sh000300" | "sh000688")
+            {
+                return Ok(None);
+            }
+            let metadata = details::tencent_array(&text, &format!("v_detail_time_{code}"))?;
+            let pages = details::recent_pages(&metadata, quote.trading_day())?;
+            let Some((&start, earlier)) = pages.split_last() else {
+                return Ok(None);
+            };
+            let page = earlier.len();
+            let rows = self.tencent_trade_page(code, page, start, token).await?;
+            Ok::<_, anyhow::Error>(Some((rows, earlier.last().map(|&time| (page - 1, time)))))
+        };
+        let tail = tokio::time::timeout_at(deadline, tail)
+            .await
+            .context("近期成交请求超过4秒，请稍后重试。")??;
+        let Some((mut rows, previous)) = tail else {
+            return Ok(Vec::new());
+        };
+        if rows.len() < 10
+            && let Some((page, start)) = previous
+            && let Ok(Ok(older)) =
+                tokio::time::timeout_at(deadline, self.tencent_trade_page(code, page, start, token))
+                    .await
+        {
+            for (sequence, trade) in older {
+                rows.entry(sequence).or_insert(trade);
+            }
+        }
+        // Descending sequence preserves newest-first order within a single second.
+        Ok(details::latest(rows.into_values().rev().collect()))
+    }
+
+    async fn tencent_trade_page(
+        &self,
+        code: &str,
+        page: usize,
+        start: chrono::NaiveTime,
+        token: &CancellationToken,
+    ) -> Result<BTreeMap<u64, TradeTick>> {
+        let url = format!(
+            "https://stock.gtimg.cn/data/index.php?appn=detail&action=data&c={code}&p={page}"
+        );
+        let text = self
+            .get_text(&url, MarketSource::Tencent, false, 2 * 1024 * 1024, token)
+            .await
+            .context("腾讯近期成交页请求失败")?;
+        let records = details::tencent_array(&text, &format!("v_detail_data_{code}"))?;
+        details::parse_recent_page(&records, page, start)
+    }
+
     pub async fn search(&self, query: &str, token: CancellationToken) -> Result<Vec<SymbolMatch>> {
         search::search(self, query, token).await
     }

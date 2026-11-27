@@ -401,10 +401,7 @@ impl App {
         #[cfg(windows)]
         {
             if let Some(platform) = self.platform.borrow().as_ref() {
-                let mut temporary = self.settings.borrow().clone();
-                temporary.toggle_shortcut = 0;
-                temporary.refresh_shortcut = 0;
-                platform.apply_settings(&temporary)?;
+                platform.apply_hotkeys(0, 0)?;
             }
             MODAL_GUARD.with(|slot| {
                 slot.take();
@@ -473,8 +470,14 @@ impl App {
                 slot.take();
             });
             if let Some(platform) = self.platform.borrow().as_ref() {
-                if let Err(error) = platform.apply_settings(&self.settings.borrow()) {
+                let settings = self.settings.borrow();
+                if let Err(error) =
+                    platform.apply_hotkeys(settings.toggle_shortcut, settings.refresh_shortcut)
+                {
+                    self.platform_message.replace(error.to_string());
                     self.window.set_footer(error.to_string().into());
+                } else {
+                    self.platform_message.borrow_mut().clear();
                 }
             }
         }

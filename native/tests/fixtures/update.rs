@@ -1137,7 +1137,10 @@ fn identity_checks_file_version_original_filename_and_handoff_arguments() {
     put16(&mut wrong, index, b'X' as u16);
     assert!(native_identity(&wrong).is_err());
     assert!(run_helper(&[]).is_err());
-    assert!(!owned_container(Path::new("/not-owned")));
+    assert!(!owned_container(
+        Path::new("/not-owned"),
+        &std::env::temp_dir()
+    ));
     let temp = Temp::new();
     let unrelated = temp.0.join("other.txt");
     fs::write(&unrelated, b"keep").unwrap();
@@ -1164,6 +1167,38 @@ fn actual_native_stable_identity() {
     );
 }
 
+#[test]
+fn cleanup_removes_only_completed_native_helpers() {
+    let temp = Temp::new();
+    let make = |record: &str| {
+        let mut directory = OwnedDirectory::new_in(&temp.0).unwrap();
+        directory.keep = true;
+        fs::write(
+            directory.path.join("apply.exe"),
+            executable(crate::VERSION, PRODUCT, false),
+        )
+        .unwrap();
+        fs::write(directory.path.join("result.txt"), record).unwrap();
+        directory.path.clone()
+    };
+    let completed = make("更新完成，已启动正式版新版。");
+    let failed = make("更新未完成：failed");
+    let active = make("更新完成，已启动正式版新版。");
+    fs::write(active.join("plan.json"), b"active").unwrap();
+    let foreign = make("更新完成，已启动正式版新版。");
+    fs::write(foreign.join("apply.exe"), b"another program").unwrap();
+    let backup = temp.0.join("LiteTicker.exe.previous");
+    fs::write(&backup, b"backup").unwrap();
+
+    cleanup_completed_helpers(&temp.0);
+    assert!(!completed.exists());
+    for keep in [&failed, &active, &foreign] {
+        assert!(keep.join("apply.exe").is_file());
+        assert!(keep.join("result.txt").is_file());
+    }
+    assert_eq!(fs::read(backup).unwrap(), b"backup");
+}
+
 #[cfg(unix)]
 #[test]
 fn cleanup_refuses_a_replaced_directory_symlink() {
@@ -1178,6 +1213,56 @@ fn cleanup_refuses_a_replaced_directory_symlink() {
     assert_eq!(fs::read(outside.0.join(ASSET)).unwrap(), b"foreign");
     assert!(path.is_symlink());
     fs::remove_file(path).unwrap();
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn preparing_a_handoff_leaves_the_target_running_and_discard_releases_files() {
+    let temp = Temp::new();
+    let plan = plan(&temp);
+    let current = fs::read(&plan.target).unwrap();
+    let directory = OwnedDirectory::new_in(&temp.0).unwrap();
+    let path = directory.path.join(ASSET);
+    let bytes = fs::read(&plan.payload).unwrap();
+    fs::write(&path, &bytes).unwrap();
+    let download = DownloadedUpdate {
+        _directory: directory,
+        path,
+        release: release(next_release_version(), &bytes),
+    };
+    let target = plan.target.clone();
+    let prepared = tokio::task::spawn_blocking(move || prepare_update_for(download, target))
+        .await
+        .unwrap()
+        .unwrap();
+    let handoff = prepared.directory.path.clone();
+    assert!(handoff.join("plan.json").is_file());
+    assert_eq!(fs::read(&plan.target).unwrap(), current);
+    drop(prepared);
+    assert!(!handoff.exists());
+    assert_eq!(fs::read(plan.target).unwrap(), current);
+}
+
+#[cfg(windows)]
+#[test]
+fn cleanup_retries_a_helper_that_is_still_in_use() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let temp = Temp::new();
+    let directory = OwnedDirectory::new_in(&temp.0).unwrap();
+    let helper = directory.path.join("apply.exe");
+    fs::write(&helper, executable(crate::VERSION, PRODUCT, false)).unwrap();
+    fs::write(directory.path.join("result.txt"), UPDATE_SUCCESS).unwrap();
+    let hold = OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .open(&helper)
+        .unwrap();
+    cleanup_completed_helpers(&temp.0);
+    assert!(helper.exists());
+    assert!(directory.path.join("result.txt").exists());
+    drop(hold);
+    cleanup_completed_helpers(&temp.0);
+    assert!(!directory.path.exists());
 }
 
 #[test]

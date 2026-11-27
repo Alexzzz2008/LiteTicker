@@ -1,5 +1,5 @@
 use super::{decimal, number, text};
-use crate::model::{DailyBar, MarketSource, MinutePoint, TradeTick, beijing_now};
+use crate::model::{DailyBar, MarketSource, MinutePoint, TradeTick};
 use anyhow::{Context, Result, bail};
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use rust_decimal::Decimal;
@@ -109,30 +109,43 @@ fn is_session_minute(time: NaiveTime) -> bool {
     matches!(time.hour() * 100 + time.minute(), 930..=1130 | 1300..=1500)
 }
 
-pub(super) fn shanghai_session_day(
+pub(super) fn minute_session_day(
     payload: &Value,
     code: &str,
     source: MarketSource,
-) -> Option<NaiveDate> {
+) -> Result<Option<NaiveDate>> {
     let data = &payload["data"];
     if source == MarketSource::Tencent {
-        return NaiveDate::parse_from_str(data[code]["data"]["date"].as_str()?, "%Y%m%d").ok();
+        let date = &data[code]["data"]["date"];
+        if date.is_null() {
+            return Ok(None);
+        }
+        let date = NaiveDate::parse_from_str(date.as_str().unwrap_or_default(), "%Y%m%d")
+            .context("分时交易日无效。")?;
+        return Ok(Some(date));
     }
-    let (market, symbol) = code.split_once('.')?;
+    let (market, symbol) = code.split_once('.').context("分时证券代码无效。")?;
     if data["code"].as_str() != Some(symbol)
         || data
             .get("market")
             .is_some_and(|value| text(value) != market)
     {
-        return None;
+        bail!("行情接口返回了其他证券的数据。");
     }
-    let mut days = data["trends"].as_array()?.iter().filter_map(|row| {
-        let (timestamp, _) = row.as_str()?.split_once(',')?;
-        let point = NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%d %H:%M").ok()?;
-        is_session_minute(point.time()).then_some(point.date())
-    });
-    let day = days.next()?;
-    days.all(|other| other == day).then_some(day)
+    let mut days = data["trends"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            let (timestamp, _) = row.as_str()?.split_once(',')?;
+            let point = NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%d %H:%M").ok()?;
+            is_session_minute(point.time()).then_some(point.date())
+        });
+    let day = days.next();
+    if !days.all(|other| Some(other) == day) {
+        bail!("分时数据包含多个交易日。");
+    }
+    Ok(day)
 }
 
 fn sina_shanghai_open(snapshot: &str, day: NaiveDate) -> Option<Decimal> {
@@ -269,56 +282,43 @@ pub(super) fn tencent_array(text: &str, variable: &str) -> Result<Vec<Value>> {
     }
     Ok(values)
 }
-pub(super) fn quote_date(timestamp: &str) -> NaiveDate {
-    if timestamp.len() == 14 {
-        NaiveDateTime::parse_from_str(timestamp, "%Y%m%d%H%M%S")
-            .ok()
-            .map(|d| d.date())
-    } else if timestamp.len() == 8 {
-        NaiveDate::parse_from_str(timestamp, "%Y%m%d").ok()
-    } else {
-        None
-    }
-    .unwrap_or_else(|| beijing_now().date())
-}
-pub(super) fn recent_page(
+pub(super) fn recent_pages(
     metadata: &[Value],
-    expected: NaiveDate,
-) -> Result<(Option<usize>, NaiveTime)> {
-    let date = text(&metadata[0]);
-    if date.len() != 8 || NaiveDate::parse_from_str(&date, "%Y%m%d").ok() != Some(expected) {
+    expected: Option<NaiveDate>,
+) -> Result<Vec<NaiveTime>> {
+    let date = NaiveDate::parse_from_str(&text(&metadata[0]), "%Y%m%d")
+        .context("腾讯近期成交日期无效。")?;
+    if expected.is_some_and(|expected| expected != date) {
         bail!("腾讯近期成交日期与报价日期不匹配。");
     }
     let ranges = metadata[1].as_str().context("腾讯近期成交页时间表无效。")?;
+    let mut starts = Vec::new();
     if ranges.is_empty() {
-        return Ok((None, NaiveTime::MIN));
+        return Ok(starts);
     }
-    let ranges: Vec<_> = ranges.split('|').collect();
-    if ranges.len() > 4096 {
-        bail!("腾讯近期成交页数超出上限。");
-    }
-    let mut start = NaiveTime::MIN;
     let mut end = NaiveTime::MIN;
-    for range in &ranges {
-        let bounds: Vec<_> = range.split('~').collect();
-        if bounds.len() != 2 {
-            bail!("腾讯近期成交页时间表无效。");
+    for range in ranges.split('|') {
+        if starts.len() >= 4096 {
+            bail!("腾讯近期成交页数超出上限。");
         }
-        let first = trade_time(bounds[0]).context("腾讯近期成交页时间表无效。")?;
-        let last = trade_time(bounds[1]).context("腾讯近期成交页时间表无效。")?;
+        let (first, last) = range
+            .split_once('~')
+            .context("腾讯近期成交页时间表无效。")?;
+        let first = trade_time(first).context("腾讯近期成交页时间表无效。")?;
+        let last = trade_time(last).context("腾讯近期成交页时间表无效。")?;
         if first > last || first < end {
             bail!("腾讯近期成交页时间表无效。");
         }
-        start = first;
+        starts.push(first);
         end = last;
     }
-    Ok((Some(ranges.len() - 1), start))
+    Ok(starts)
 }
 pub(super) fn parse_recent_page(
     records: &[Value],
     expected: usize,
     start: NaiveTime,
-) -> Result<Vec<TradeTick>> {
+) -> Result<BTreeMap<u64, TradeTick>> {
     if text(&records[0]).parse::<usize>().ok() != Some(expected) {
         bail!("腾讯近期成交返回页号与末页不匹配。");
     }
@@ -360,8 +360,7 @@ pub(super) fn parse_recent_page(
     if parsed.is_empty() {
         bail!("腾讯近期成交末页为空、损坏或时间区间不匹配。");
     }
-    // Within one second, larger sequence numbers identify newer trades.
-    Ok(latest(parsed.into_values().rev().collect()))
+    Ok(parsed)
 }
 pub(super) fn parse_em_trades(payload: &Value, symbol: &str) -> Result<Vec<TradeTick>> {
     if !payload["rc"].is_null() && number(&payload["rc"]) != Some(Decimal::ZERO) {
@@ -416,7 +415,7 @@ pub(super) fn parse_em_trades(payload: &Value, symbol: &str) -> Result<Vec<Trade
     }
     Ok(latest(trades))
 }
-fn latest(mut trades: Vec<TradeTick>) -> Vec<TradeTick> {
+pub(super) fn latest(mut trades: Vec<TradeTick>) -> Vec<TradeTick> {
     trades.sort_by(|a, b| b.time.cmp(&a.time));
     trades.truncate(20);
     trades

@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use chrono::{Datelike, NaiveDateTime, Timelike, Weekday};
+use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike, Weekday};
 use rust_decimal::{Decimal, RoundingStrategy};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -90,6 +90,16 @@ pub struct Quote {
 }
 
 impl Quote {
+    pub(crate) fn trading_day(&self) -> Option<NaiveDate> {
+        match self.timestamp.len() {
+            14 => NaiveDateTime::parse_from_str(&self.timestamp, "%Y%m%d%H%M%S")
+                .ok()
+                .map(|at| at.date()),
+            8 => NaiveDate::parse_from_str(&self.timestamp, "%Y%m%d").ok(),
+            _ => None,
+        }
+    }
+
     pub(crate) fn is_older_than(&self, previous: &Self) -> bool {
         // Full provider timestamps sort chronologically. Replays may omit them or use dates alone.
         self.timestamp < previous.timestamp
@@ -287,12 +297,36 @@ pub fn format_depth_amount(price: Decimal, lots: Decimal) -> String {
         fixed(amount, 2)
     }
 }
-pub fn is_trading_time(beijing: NaiveDateTime) -> bool {
-    if matches!(beijing.weekday(), Weekday::Sat | Weekday::Sun) {
-        return false;
-    }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TradingSession {
+    Closed,
+    Open,
+    EstimatedOpen,
+}
+pub fn trading_session(beijing: NaiveDateTime) -> TradingSession {
     let hm = beijing.hour() * 100 + beijing.minute();
-    (915..=1135).contains(&hm) || (1255..=1505).contains(&hm)
+    if matches!(beijing.weekday(), Weekday::Sat | Weekday::Sun)
+        || !((915..=1135).contains(&hm) || (1255..=1505).contains(&hm))
+    {
+        return TradingSession::Closed;
+    }
+    // SSE annual closure notices 〔2024〕38 and 〔2025〕45. Ranges use MMDD.
+    let day = beijing.month() * 100 + beijing.day();
+    let holiday = match beijing.year() {
+        2025 => matches!(day, 101 | 128..=204 | 404..=406 | 501..=505 | 531..=602 | 1001..=1008),
+        2026 => {
+            matches!(day, 101..=103 | 215..=223 | 404..=406 | 501..=505 | 619..=621 | 925..=927 | 1001..=1007)
+        }
+        _ => return TradingSession::EstimatedOpen,
+    };
+    if holiday {
+        TradingSession::Closed
+    } else {
+        TradingSession::Open
+    }
+}
+pub fn is_trading_time(beijing: NaiveDateTime) -> bool {
+    trading_session(beijing) != TradingSession::Closed
 }
 pub fn interval_seconds(settings: &AppSettings, now: NaiveDateTime) -> i32 {
     if is_trading_time(now) {

@@ -41,6 +41,9 @@ export component MainWindow inherits Window {
     in property <[QuoteRow]> rows;
     in property <string> footer;
     in-out property <int> selection: -1;
+    changed selection => {
+        if root.selection >= 0 { list.ensure-row-visible(root.selection, ScrollBehavior.instant); }
+    }
     in-out property <bool> pointer-down: false;
     callback select-row(int);
     callback open-row(int);

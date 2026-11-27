@@ -25,7 +25,7 @@ mod chart;
 mod dialogs;
 mod replay_check;
 mod updates_ui;
-use liteticker_native::update::{self, DownloadedUpdate, Release};
+use liteticker_native::update::{self, PreparedUpdate, Release};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -40,7 +40,7 @@ enum Completion {
     Search(u64, Result<Vec<SymbolMatch>, String>),
     Update(u64, Result<Option<Release>, String>),
     Progress(u64, u8),
-    Download(u64, Result<DownloadedUpdate, String>),
+    UpdatePrepared(u64, Result<PreparedUpdate, String>),
 }
 thread_local! {static ACTIVE: RefCell<Weak<App>> = RefCell::new(Weak::new());}
 fn deliver(message: Completion) {
@@ -275,6 +275,14 @@ fn launch() -> Result<()> {
         platform: Default::default(),
     });
     ACTIVE.with(|slot| *slot.borrow_mut() = Rc::downgrade(&app));
+    #[cfg(windows)]
+    if app.replay.is_none() {
+        app.runtime.spawn(async {
+            // The previous helper first waits for this process to stay alive and records success.
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            let _ = tokio::task::spawn_blocking(update::cleanup_finished_updates).await;
+        });
+    }
     app.wire();
     app.render();
     #[cfg(windows)]
@@ -301,11 +309,9 @@ fn launch() -> Result<()> {
                     next.replay.is_none(),
                 )?;
                 let settings = next.settings.borrow();
-                if let Err(e) = p.apply_settings(&settings) {
-                    let mut fallback = settings.clone();
-                    fallback.toggle_shortcut = 0;
-                    fallback.refresh_shortcut = 0;
-                    p.apply_settings(&fallback)?;
+                p.apply_appearance(&settings)?;
+                if let Err(e) = p.apply_hotkeys(settings.toggle_shortcut, settings.refresh_shortcut)
+                {
                     next.platform_message.replace(e.to_string());
                 }
                 next.platform.replace(Some(p));
@@ -519,10 +525,10 @@ impl App {
             format!(
                 "{} 只 · {} · {}s",
                 s.symbols.len(),
-                if is_trading_time(now) {
-                    "交易中"
-                } else {
-                    "休市"
+                match trading_session(now) {
+                    TradingSession::Closed => "休市",
+                    TradingSession::Open => "交易中",
+                    TradingSession::EstimatedOpen => "预计交易时段",
                 },
                 interval_seconds(&s, now)
             )
@@ -627,9 +633,13 @@ impl App {
             Completion::Search(g, v) => self.finish_search(g, v),
             Completion::Update(g, v) => self.checked_update(g, v),
             Completion::Progress(g, pct) if g == self.update_gen.get() => {
-                self.set_update_message(format!("正在下载更新… {pct}%"))
+                self.set_update_message(if pct == 100 {
+                    "正在校验并准备更新…".into()
+                } else {
+                    format!("正在下载更新… {pct}%")
+                })
             }
-            Completion::Download(g, result) => self.downloaded_update(g, result),
+            Completion::UpdatePrepared(g, result) => self.finish_update_preparation(g, result),
             Completion::Progress(..) => {}
         }
     }
@@ -772,19 +782,51 @@ impl App {
         let pos = self.window.window().position();
         s.x = pos.x;
         s.y = pos.y;
+        let previous = self.settings.borrow();
+        let refit = s.global_font_percent != previous.global_font_percent
+            || percent(s.quote_font_percent, s.global_font_percent)
+                != percent(previous.quote_font_percent, previous.global_font_percent)
+            || s.symbols.len().clamp(1, 12) != previous.symbols.len().clamp(1, 12);
         #[cfg(windows)]
-        if let Some(p) = self.platform.borrow().as_ref() {
-            p.apply_settings(&s)?;
-        }
-        if self.replay.is_none() {
-            if let Err(e) = self.store.save(&s) {
-                #[cfg(windows)]
-                if let Some(p) = self.platform.borrow().as_ref() {
-                    p.apply_settings(&self.settings.borrow())?;
+        let keys_changed = s.toggle_shortcut != previous.toggle_shortcut
+            || s.refresh_shortcut != previous.refresh_shortcut;
+        #[cfg(windows)]
+        let appearance_changed = s.always_on_top != previous.always_on_top
+            || s.opacity_percent != previous.opacity_percent
+            || s.global_font_percent != previous.global_font_percent;
+        let result = (|| -> Result<()> {
+            #[cfg(windows)]
+            if let Some(p) = self.platform.borrow().as_ref() {
+                if keys_changed {
+                    p.apply_hotkeys(s.toggle_shortcut, s.refresh_shortcut)?;
                 }
-                return Err(e);
+                if appearance_changed {
+                    p.apply_appearance(&s)?;
+                }
             }
+            if self.replay.is_none() {
+                self.store.save(&s)?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            #[cfg(windows)]
+            if let Some(p) = self.platform.borrow().as_ref() {
+                if keys_changed {
+                    // Global shortcuts are suspended while the settings dialog is open.
+                    if self.modal() {
+                        p.apply_hotkeys(0, 0)?;
+                    } else {
+                        p.apply_hotkeys(previous.toggle_shortcut, previous.refresh_shortcut)?;
+                    }
+                }
+                if appearance_changed {
+                    p.apply_appearance(&previous)?;
+                }
+            }
+            return Err(error);
         }
+        drop(previous);
         if self
             .detail_symbol
             .borrow()
@@ -794,11 +836,12 @@ impl App {
         {
             self.close_depth();
         }
-        self.platform_message.borrow_mut().clear();
         self.settings.replace(s.clone());
         self.quotes.borrow_mut().update_settings(s);
         self.render();
-        self.fit();
+        if refit {
+            self.fit();
+        }
         self.refresh();
         Ok(())
     }
@@ -825,7 +868,7 @@ impl App {
         false
     }
     fn hover_row(self: &Rc<Self>, row: i32, inside: bool) {
-        if self.modal() || self.pinned.get() || !self.visible.get() {
+        if self.modal() || !self.visible.get() {
             return;
         }
         let Some(symbol) = self.settings.borrow().symbols.get(row as usize).cloned() else {
@@ -841,6 +884,9 @@ impl App {
             if self.hovered_symbol.borrow().is_none() {
                 self.schedule_leave();
             }
+            return;
+        }
+        if self.pinned.get() {
             return;
         }
         if self.pointer_pressed() {
@@ -1030,6 +1076,14 @@ impl App {
                 })
             });
     }
+    fn select_detail_quote(&self, quote: &Arc<Quote>, source: MarketSource) {
+        self.details
+            .borrow_mut()
+            .select(Some(quote.clone()), source, self.daily.get());
+        self.trades
+            .borrow_mut()
+            .select(Some(quote.clone()), source, false);
+    }
     fn refresh_details(self: &Rc<Self>, force: bool) {
         let Some(id) = self.detail_symbol.borrow().clone() else {
             return;
@@ -1038,11 +1092,10 @@ impl App {
             return;
         };
         let source = self.settings.borrow().source;
+        self.select_detail_quote(&q, source);
         let trade_interval = self.trade_refresh_interval();
         for trades in [false, true] {
             let lane = if trades { &self.trades } else { &self.details };
-            let daily = !trades && self.daily.get();
-            lane.borrow_mut().select(Some(q.clone()), source, daily);
             let r = lane.borrow_mut().begin_refresh(
                 force,
                 self.start.elapsed(),
@@ -1098,6 +1151,7 @@ impl App {
         let Some(q) = snap.quotes.get(&id) else {
             return;
         };
+        self.select_detail_quote(q, self.settings.borrow().source);
         let depth = self.depth.borrow();
         let Some(d) = depth.as_ref() else { return };
         d.set_heading(format!("{}  {}", q.name, id).into());

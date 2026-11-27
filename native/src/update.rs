@@ -29,6 +29,7 @@ const CHECKSUM_ASSET: &str = "LiteTicker.exe.sha256";
 const PRODUCT: &str = "LiteTicker";
 const LIMIT: u64 = 20 * 1024 * 1024;
 const METADATA_LIMIT: usize = 1024 * 1024;
+const UPDATE_SUCCESS: &str = "更新完成，已启动正式版新版。";
 const HELPER_ARG: &str = "--apply-native-update";
 pub type Progress = Arc<dyn Fn(u8) + Send + Sync>;
 
@@ -843,8 +844,29 @@ fn plan_release(plan: &Plan) -> Result<Release> {
         ))?,
     })
 }
-/// Starts the copied helper. The caller exits only after this returns successfully.
+pub struct PreparedUpdate {
+    command: Command,
+    // The read guard must close before OwnedDirectory cleans up a discarded handoff.
+    _helper_guard: File,
+    directory: OwnedDirectory,
+}
+impl PreparedUpdate {
+    pub fn launch(mut self) -> Result<()> {
+        self.command.spawn().context("无法启动原生更新助手")?;
+        self.directory.keep = true;
+        Ok(())
+    }
+}
+pub async fn prepare_update(download: DownloadedUpdate) -> Result<PreparedUpdate> {
+    tokio::task::spawn_blocking(move || prepare_current_update(download))
+        .await
+        .context("更新准备任务未完成")?
+}
+/// Synchronous entry point for callers outside the UI event loop.
 pub fn launch_update(download: DownloadedUpdate) -> Result<()> {
+    prepare_current_update(download)?.launch()
+}
+fn prepare_current_update(download: DownloadedUpdate) -> Result<PreparedUpdate> {
     #[cfg(not(windows))]
     {
         let _ = download;
@@ -852,61 +874,65 @@ pub fn launch_update(download: DownloadedUpdate) -> Result<()> {
     }
     #[cfg(windows)]
     {
-        let target = std::env::current_exe()?.canonicalize()?;
-        let original = native_identity(&fs::read(&target)?)?;
-        ensure!(
-            original.version == version(crate::VERSION)?,
-            "当前运行程序的正式版身份或版本不匹配"
-        );
-        verify_candidate(&download.path(), download.release())?;
-        ensure!(
-            version(&download.release.version)? > original.version,
-            "更新必须高于当前版本"
-        );
-        let mut directory = OwnedDirectory::new()?;
-        let payload = directory.path.join("payload.exe");
-        copy_synced(&download.path(), &payload)?;
-        verify_candidate(&payload, download.release())?;
-        let plan = Plan {
-            target: target.clone(),
-            payload,
-            version: download.release.version.clone(),
-            sha256: download.release.sha256.clone(),
-            size: download.release.size,
-            original_sha256: hash_file(&target)?,
-            original_version: crate::VERSION.into(),
-            parent_id: std::process::id(),
-            parent_started: current_process_started()?,
-            wait_ms: 20_000,
-        };
-        let helper = directory.path.join("apply.exe");
-        copy_synced(&target, &helper)?;
-        verify_old(&helper, &plan)?;
-        let manifest = directory.path.join("plan.json");
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&manifest)?;
-        file.write_all(&serde_json::to_vec(&plan)?)?;
-        file.sync_all()?;
-        drop(file);
-        let digest = hash_file(&manifest)?;
-        use std::os::windows::fs::OpenOptionsExt;
-        let helper_guard = OpenOptions::new().read(true).share_mode(1).open(&helper)?;
-        verify_old(&helper, &plan)?;
-        let mut command = Command::new(&helper);
-        command
-            .arg(HELPER_ARG)
-            .arg(&manifest)
-            .arg(digest)
-            .current_dir(&directory.path);
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000);
-        command.spawn().context("无法启动原生更新助手")?;
-        directory.keep = true;
-        drop(helper_guard);
-        Ok(())
+        prepare_update_for(download, std::env::current_exe()?.canonicalize()?)
     }
+}
+#[cfg(windows)]
+fn prepare_update_for(download: DownloadedUpdate, target: PathBuf) -> Result<PreparedUpdate> {
+    let original = native_identity(&read_file_bounded(&target, LIMIT)?)?;
+    ensure!(
+        original.version == version(crate::VERSION)?,
+        "当前运行程序的正式版身份或版本不匹配"
+    );
+    verify_candidate(&download.path(), download.release())?;
+    ensure!(
+        version(&download.release.version)? > original.version,
+        "更新必须高于当前版本"
+    );
+    let directory = OwnedDirectory::new()?;
+    let payload = directory.path.join("payload.exe");
+    copy_synced(&download.path(), &payload)?;
+    verify_candidate(&payload, download.release())?;
+    let plan = Plan {
+        target: target.clone(),
+        payload,
+        version: download.release.version.clone(),
+        sha256: download.release.sha256.clone(),
+        size: download.release.size,
+        original_sha256: hash_file(&target)?,
+        original_version: crate::VERSION.into(),
+        parent_id: std::process::id(),
+        parent_started: current_process_started()?,
+        wait_ms: 20_000,
+    };
+    let helper = directory.path.join("apply.exe");
+    copy_synced(&target, &helper)?;
+    verify_old(&helper, &plan)?;
+    let manifest = directory.path.join("plan.json");
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&manifest)?;
+    file.write_all(&serde_json::to_vec(&plan)?)?;
+    file.sync_all()?;
+    drop(file);
+    let digest = hash_file(&manifest)?;
+    use std::os::windows::fs::OpenOptionsExt;
+    let helper_guard = OpenOptions::new().read(true).share_mode(1).open(&helper)?;
+    verify_old(&helper, &plan)?;
+    let mut command = Command::new(&helper);
+    command
+        .arg(HELPER_ARG)
+        .arg(&manifest)
+        .arg(digest)
+        .current_dir(&directory.path);
+    use std::os::windows::process::CommandExt;
+    command.creation_flags(0x08000000);
+    Ok(PreparedUpdate {
+        command,
+        _helper_guard: helper_guard,
+        directory,
+    })
 }
 /// Invoke before single-instance acquisition or creating any windows.
 pub fn run_helper_if_requested() -> Option<i32> {
@@ -949,7 +975,8 @@ fn run_helper(args: &[std::ffi::OsString]) -> Result<()> {
     let executable = std::env::current_exe()?.canonicalize()?;
     let directory = executable.parent().context("更新助手目录无效")?;
     ensure!(
-        executable.file_name().is_some_and(|n| n == "apply.exe") && owned_container(directory),
+        executable.file_name().is_some_and(|n| n == "apply.exe")
+            && owned_container(directory, &std::env::temp_dir().canonicalize()?),
         "不是自有更新助手目录"
     );
     let manifest = directory.join("plan.json");
@@ -975,7 +1002,7 @@ fn run_helper(args: &[std::ffi::OsString]) -> Result<()> {
     verify_old(&executable, &plan)?;
     let outcome = apply_plan(&plan, wait_for_parent, start_process);
     let message = match &outcome {
-        Ok(()) => "更新完成，已启动正式版新版。".into(),
+        Ok(()) => UPDATE_SUCCESS.into(),
         Err(error) => format!("更新未完成：{error:#}"),
     };
     let _ = fs::write(directory.join("result.txt"), message);
@@ -983,7 +1010,51 @@ fn run_helper(args: &[std::ffi::OsString]) -> Result<()> {
     let _ = fs::remove_file(manifest);
     outcome
 }
-fn owned_container(directory: &Path) -> bool {
+pub fn cleanup_finished_updates() {
+    cleanup_completed_helpers(&std::env::temp_dir());
+}
+fn cleanup_completed_helpers(root: &Path) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let directory = entry.path();
+        if !owned_container(&directory, root) {
+            continue;
+        }
+        let record = directory.join("result.txt");
+        if !read_file_bounded(&record, 256).is_ok_and(|bytes| bytes == UPDATE_SUCCESS.as_bytes()) {
+            continue;
+        }
+        // A handoff can still be active when the newly launched app starts.
+        let Ok(mut contents) = fs::read_dir(&directory) else {
+            continue;
+        };
+        if !contents.all(|entry| {
+            entry.is_ok_and(|e| e.file_name() == "result.txt" || e.file_name() == "apply.exe")
+        }) {
+            continue;
+        }
+        let helper = directory.join("apply.exe");
+        match fs::symlink_metadata(&helper) {
+            Ok(_) => {
+                if read_file_bounded(&helper, LIMIT)
+                    .and_then(|data| native_identity(&data))
+                    .is_err()
+                    || fs::remove_file(&helper).is_err()
+                {
+                    continue;
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => continue,
+        }
+        if fs::remove_file(record).is_ok() {
+            let _ = fs::remove_dir(directory);
+        }
+    }
+}
+fn owned_container(directory: &Path, root: &Path) -> bool {
     let Some(name) = directory.file_name().and_then(|s| s.to_str()) else {
         return false;
     };
@@ -992,8 +1063,7 @@ fn owned_container(directory: &Path) -> bool {
     };
     id.len() == 32
         && id.bytes().all(|b| b.is_ascii_hexdigit())
-        && directory.parent().and_then(|p| p.canonicalize().ok())
-            == std::env::temp_dir().canonicalize().ok()
+        && directory.parent() == Some(root)
         && plain_directory(directory)
 }
 fn verify_old(path: &Path, plan: &Plan) -> Result<()> {

@@ -130,6 +130,14 @@ fn check_chart_axis(depth: &DetailsWindow) -> Result<()> {
     Ok(())
 }
 
+fn selected_row_visible(app: &App) -> Result<bool> {
+    let image = app.window.window().take_snapshot()?;
+    Ok(image
+        .as_bytes()
+        .chunks_exact(4)
+        .any(|p| p[..3] == [0x30, 0x2f, 0x38]))
+}
+
 fn name_position(app: &App, row: usize) -> slint::LogicalPosition {
     let window = app.window.window();
     let physical_row_height = (window.size().height as f32 - 48.) / 12.;
@@ -397,6 +405,34 @@ fn check_quote_drag(app: Rc<App>, out: PathBuf, complete: Rc<Cell<bool>>, step: 
             }
             17 => {
                 check_hover_depth(&app, None, false).context("按住后移出列表，未固定盘口应关闭")?;
+                point_at_name(&app, 0);
+            }
+            18 => {
+                use slint::platform::{Key, WindowEvent};
+                check_hover_depth(&app, Some(0), false)?;
+                app.window.invoke_select_row(0);
+                app.window.window().dispatch_event(WindowEvent::KeyPressed {
+                    text: Key::Return.into(),
+                });
+                app.window
+                    .window()
+                    .dispatch_event(WindowEvent::KeyReleased {
+                        text: Key::Return.into(),
+                    });
+                check_hover_depth(&app, Some(0), true)?;
+                app.window
+                    .window()
+                    .dispatch_event(WindowEvent::PointerExited);
+                let depth = app.depth.borrow().as_ref().unwrap().clone_strong();
+                depth.window().dispatch_event(WindowEvent::PointerMoved {
+                    position: slint::LogicalPosition::new(24., 200.),
+                });
+                depth.invoke_command("pin".into());
+                depth.window().dispatch_event(WindowEvent::PointerExited);
+            }
+            19 => {
+                check_hover_depth(&app, None, false)
+                    .context("回车固定后解除固定，移出盘口应关闭")?;
                 app.window.invoke_open_row(0);
                 filter_pointer_leave(app.window.window(), false)?;
                 complete.set(true);
@@ -695,6 +731,7 @@ pub fn start(app: Rc<App>, out: PathBuf) -> Result<Timer> {
     std::fs::create_dir(&out).context("验收输出必须是新目录")?;
     let mut phase = -5_i32;
     let mut hidden_tick = 0;
+    let mut keyboard_row_visible = false;
     let mut settings_input = SettingsInput::default();
     let drag_checked = Rc::new(Cell::new(false));
     let timer = Timer::default();
@@ -868,8 +905,38 @@ pub fn start(app: Rc<App>, out: PathBuf) -> Result<Timer> {
                     #[cfg(not(windows))]
                     app.show();
                 }
-                _ => {
+                7 => {
                     ensure!(app.visible.get() && app.tick.get() > hidden_tick, "托盘恢复后未刷新");
+                    let window = app.window.window();
+                    window.set_size(slint::PhysicalSize::new(window.size().width, 300));
+                }
+                8 => {
+                    let window = app.window.window();
+                    app.window.invoke_select_row(11);
+                    let key = slint::platform::Key::DownArrow.into();
+                    window.dispatch_event(slint::platform::WindowEvent::KeyPressed { text: key });
+                    window.dispatch_event(slint::platform::WindowEvent::KeyReleased { text: slint::platform::Key::DownArrow.into() });
+                    ensure!(app.window.get_selection() == 12, "方向键未选中第13行");
+                }
+                9 => {
+                    keyboard_row_visible = selected_row_visible(&app)?;
+                    app.command("bottom");
+                    ensure!(app.window.get_selection() == app.rows.row_count() as i32 - 1, "置底后选中位置不正确");
+                }
+                10 => {
+                    let bottom_visible = selected_row_visible(&app)?;
+                    let height = app.window.window().size().height;
+                    ensure!(keyboard_row_visible && bottom_visible && height == 300, "键盘选中行可见={keyboard_row_visible}，置底行可见={bottom_visible}，排序后窗口高度={height}（应为300）");
+                    app.command("settings");
+                }
+                11 => {
+                    let w = app.settings_view.borrow().as_ref().context("设置窗口未打开")?.clone_strong();
+                    w.set_opacity_pct(79.);
+                    w.invoke_action("save".into());
+                    ensure!(!app.modal() && app.settings.borrow().opacity_percent == 79, "透明度设置未保存");
+                }
+                _ => {
+                    ensure!(app.window.window().size().height == 300, "仅保存透明度重置了手调窗口高度");
                     std::fs::write(out.join("result.txt"), "PASS quote replay, 550x564 geometry, hover before and after click, held pointer and cross-row drag suppress unpinned depth, release resumes hover, pinned depth survives drag, unpinned depth stays open when switching charts and closes on pointer exit, price columns stable across lot widths and quantities at both table edges, depth and chart modes, settings tabs after title drag, toggle, cancel and save, explicit search, opacity and topmost, close-to-tray and restore")?;
                     app.command("exit");
                 }
